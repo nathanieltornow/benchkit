@@ -32,6 +32,9 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
+    "gitpython>=3.1.45",
+    "pandas>=2.3.1",
+    "pydantic>=2.11.7",
 ]
 dynamic = ["version"]
 
@@ -88,7 +91,7 @@ explicit_package_bases = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["qiskit.*", "matplotlib.*"]
+module = ["qiskit.*", "matplotlib.*", "git.*", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
