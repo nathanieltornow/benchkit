@@ -2,24 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
-import json
 import logging
-import platform
 from collections.abc import Callable
-from datetime import datetime
 from functools import wraps
+from itertools import chain
 from pathlib import Path
 from typing import Any, TypeAlias, TypeVar
 
-import git
+from benchkit.result_storage import ResultStorage, Scalar
 
-JSONScalar: TypeAlias = str | int | float | bool | None
-JSONSerializable: TypeAlias = JSONScalar | list["JSONSerializable"] | dict[str, "JSONSerializable"]
-
-
-Serializer: TypeAlias = Callable[[Any], JSONSerializable]
+Serializer: TypeAlias = Callable[[Any], dict[str, Scalar] | Scalar]
 
 
 logger = logging.getLogger(__name__)
@@ -32,20 +25,24 @@ def save_benchmark(
     _func: F | None = None,
     *,
     serializers: dict[type, Serializer] | None = None,
-    result_path: Path | str = "results",
+    storage: ResultStorage | None = None,
     repeat: int = 1,
 ) -> Callable[[F], F]:
     """Decorator to benchmark a function with specified serializers and save results.
 
     Args:
-        serializers: Mapping from types to functions that convert them to JSON-serializable dicts.
-        result_path: Directory where results will be stored.
-        repeat: How many times to run and save the benchmark function.
+        _func (F | None): The function to be decorated. If None, returns a decorator.
+        serializers (dict[type, Serializer] | None): Mapping from types to serialization functions.
+        storage (Storage | None): Storage backend to save benchmark results. Defaults to ParquetStorage.
+        repeat (int): Number of times to repeat the benchmark. Defaults to 1.
 
     Returns:
         A decorator for benchmarking.
     """
     serializers = serializers or {}
+
+    if storage is None:
+        storage = ResultStorage(Path("bench_results"))
 
     def decorator(func: F) -> F:
         @wraps(func)
@@ -55,10 +52,11 @@ def save_benchmark(
             bound.apply_defaults()
 
             # Serialize inputs for logging
-            inputs = {name: _safe_serialize(val, serializers) for name, val in bound.arguments.items()}
-
-            config_hash = _compute_config_hash(inputs, _get_git_commit())
-            Path(result_path).mkdir(parents=True, exist_ok=True)
+            inputs = dict(
+                chain.from_iterable(
+                    _safe_serialize(name, val, serializers).items() for name, val in bound.arguments.items()
+                )
+            )
 
             last_output = {}
 
@@ -68,22 +66,18 @@ def save_benchmark(
                 if not isinstance(raw_output, dict):
                     raw_output = {"result": raw_output}
 
-                outputs = {name: _safe_serialize(val, serializers) for name, val in raw_output.items()}
-
-                meta = _collect_metadata()
-                meta["config_hash"] = config_hash
-                meta["repetition"] = i
-
-                timestamp = current_timestamp()
-                filename = f"{timestamp}_{i}_{config_hash}.json"
-                filepath = Path(result_path) / filename
-
-                with filepath.open("w") as f:
-                    json.dump(
-                        {"inputs": inputs, "outputs": outputs, "meta": meta},
-                        f,
-                        indent=2,
+                outputs = dict(
+                    chain.from_iterable(
+                        _safe_serialize(name, val, serializers).items() for name, val in raw_output.items()
                     )
+                )
+
+                storage.save_benchmark(
+                    func_name=func.__name__,
+                    inputs=inputs,
+                    outputs=outputs,
+                    metadata={"m_iter": int(i + 1)},
+                )
 
                 last_output = outputs
 
@@ -97,58 +91,53 @@ def save_benchmark(
     return decorator
 
 
-def _collect_metadata() -> dict[str, str | int]:
-    return {
-        "timestamp": current_timestamp(),
-        "system": platform.node(),
-        "git_commit": _get_git_commit(),
-    }
-
-
-def current_timestamp() -> str:
-    """Get the current timestamp in ISO 8601 format.
-
-    Returns:
-        str: Current timestamp formatted as 'YYYY-MM-DDTHH-MM-SS'.
-    """
-    return datetime.now().astimezone().strftime("%Y-%m-%dT%H-%M-%S")
-
-
-def _get_git_commit() -> str:
-    try:
-        repo = git.Repo(search_parent_directories=True)
-        return str(repo.head.object.hexsha[:7])
-    except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError):
-        logger.warning("Not a git repository or no commit found.")
-        return "unknown"
-
-
-def _compute_config_hash(inputs: dict[str, Any], git_commit: str) -> str:
-    hasher = hashlib.sha256()
-    hasher.update(json.dumps(inputs, sort_keys=True).encode("utf-8"))
-    hasher.update(git_commit.encode("utf-8"))
-    return hasher.hexdigest()[:8]
-
-
-def _safe_serialize(val: object, serializers: dict[type, Serializer]) -> JSONSerializable:
-    """Safely serialize a value using provided serializers.
+def _safe_serialize(arg_name: str, val: object, serializers: dict[type, Serializer]) -> dict[str, Scalar]:
+    """Safely serialize a value using the provided serializers.
 
     Args:
-        val (object): The value to serialize.
-        serializers (dict[type, Serializer]): A dictionary mapping types to serialization functions.
+        arg_name (str): Name of the argument being serialized.
+        val (object): Value to serialize.
+        serializers (dict[type, Serializer]): Mapping from types to serialization functions.
 
     Returns:
-        JSONSerializable: A JSON-serializable representation of the value.
+        dict[str, Scalar]: Serialized value as a dictionary.
 
     Raises:
         TypeError: If the value cannot be serialized.
     """
-    for typo, fn in serializers.items():
-        if isinstance(val, typo):
-            return fn(val)
-    try:
-        json.dumps(val)
-    except TypeError:
-        msg = f"Cannot serialize value of type {type(val)}: {val}"
-        raise TypeError(msg) from None
-    return val  # type: ignore[return-value]
+    if isinstance(val, Scalar):
+        return {arg_name: val}
+
+    for type_, serializer in serializers.items():
+        if isinstance(val, type_):
+            val = serializer(val)
+
+    if isinstance(val, dict):
+        flat_dict = _flatten_dict(val, prefix=arg_name + "_")
+        if any(not isinstance(v, Scalar) for v in flat_dict.values()):
+            msg = f"Cannot serialize nested type for argument '{arg_name}'."
+            raise TypeError(msg)
+        return flat_dict
+
+    msg = f"Unsupported type for argument '{arg_name}': {type(val)}"
+    raise TypeError(msg)
+
+
+def _flatten_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Flatten a nested dictionary with prefixed keys.
+
+    Args:
+        d (dict[str, Any]): Dictionary to flatten.
+        prefix (str): Prefix for the keys.
+
+    Returns:
+        dict[str, Any]: Flattened dictionary with prefixed keys.
+    """
+    flattened = {}
+    for key, value in d.items():
+        new_key = f"{prefix}{key}"
+        if isinstance(value, dict):
+            flattened.update(_flatten_dict(value, f"{new_key}_"))
+        else:
+            flattened[new_key] = value
+    return flattened
