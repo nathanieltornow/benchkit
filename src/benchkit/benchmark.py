@@ -6,14 +6,12 @@ import inspect
 import logging
 from collections.abc import Callable
 from functools import wraps
-from itertools import chain
 from pathlib import Path
-from typing import Any, TypeAlias, TypeVar
+from typing import Any, TypeVar
 
-from benchkit.result_storage import ResultStorage, Scalar
+from benchkit.result_storage import ResultStorage
 
-Serializer: TypeAlias = Callable[[Any], dict[str, Scalar] | Scalar]
-
+from .serialize import Serializer, serialize
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +22,21 @@ F = TypeVar("F", bound=Callable[..., Any])
 def save_benchmark(
     _func: F | None = None,
     *,
+    bench_name: str | None = None,
     serializers: dict[type, Serializer] | None = None,
     storage: ResultStorage | None = None,
     repeat: int = 1,
+    num_retries: int = 0,
 ) -> Callable[[F], F]:
     """Decorator to benchmark a function with specified serializers and save results.
 
     Args:
         _func (F | None): The function to be decorated. If None, returns a decorator.
+        bench_name (str | None): Optional name for the benchmark. If None, uses the function name.
         serializers (dict[type, Serializer] | None): Mapping from types to serialization functions.
         storage (Storage | None): Storage backend to save benchmark results. Defaults to ParquetStorage.
         repeat (int): Number of times to repeat the benchmark. Defaults to 1.
+        num_retries (int): Number of retries for the benchmark. Defaults to 0.
 
     Returns:
         A decorator for benchmarking.
@@ -52,28 +54,38 @@ def save_benchmark(
             bound.apply_defaults()
 
             # Serialize inputs for logging
-            inputs = dict(
-                chain.from_iterable(
-                    _safe_serialize(name, val, serializers).items() for name, val in bound.arguments.items()
-                )
-            )
+            inputs = serialize(bound.arguments, serializers)
 
             last_output = {}
 
             for i in range(repeat):
-                raw_output = func(*args, **kwargs)
+                success = False
+                raw_output = None
+
+                for attempt in range(num_retries + 1):
+                    try:
+                        raw_output = func(*args, **kwargs)
+                        success = True
+                        break
+                    except Exception as e:
+                        msg = (
+                            f"Error in benchmark '{bench_name or func.__name__}' "
+                            f"(attempt {attempt + 1}/{num_retries + 1}): {e}"
+                        )
+                        logger.exception(msg)
+
+                if not success:
+                    msg = f"All {num_retries + 1} attempts failed for benchmark '{bench_name or func.__name__}'"
+                    logger.error(msg)
+                    continue  # Skip storing this failed result
 
                 if not isinstance(raw_output, dict):
                     raw_output = {"result": raw_output}
 
-                outputs = dict(
-                    chain.from_iterable(
-                        _safe_serialize(name, val, serializers).items() for name, val in raw_output.items()
-                    )
-                )
+                outputs = serialize(raw_output, serializers)
 
                 storage.save_benchmark(
-                    func_name=func.__name__,
+                    bench_name=bench_name or func.__name__,
                     inputs=inputs,
                     outputs=outputs,
                     metadata={"m_iter": int(i + 1)},
@@ -89,55 +101,3 @@ def save_benchmark(
         return decorator(_func)
 
     return decorator
-
-
-def _safe_serialize(arg_name: str, val: object, serializers: dict[type, Serializer]) -> dict[str, Scalar]:
-    """Safely serialize a value using the provided serializers.
-
-    Args:
-        arg_name (str): Name of the argument being serialized.
-        val (object): Value to serialize.
-        serializers (dict[type, Serializer]): Mapping from types to serialization functions.
-
-    Returns:
-        dict[str, Scalar]: Serialized value as a dictionary.
-
-    Raises:
-        TypeError: If the value cannot be serialized.
-    """
-    if isinstance(val, Scalar):
-        return {arg_name: val}
-
-    for type_, serializer in serializers.items():
-        if isinstance(val, type_):
-            val = serializer(val)
-
-    if isinstance(val, dict):
-        flat_dict = _flatten_dict(val, prefix=arg_name + "_")
-        if any(not isinstance(v, Scalar) for v in flat_dict.values()):
-            msg = f"Cannot serialize nested type for argument '{arg_name}'."
-            raise TypeError(msg)
-        return flat_dict
-
-    msg = f"Unsupported type for argument '{arg_name}': {type(val)}"
-    raise TypeError(msg)
-
-
-def _flatten_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
-    """Flatten a nested dictionary with prefixed keys.
-
-    Args:
-        d (dict[str, Any]): Dictionary to flatten.
-        prefix (str): Prefix for the keys.
-
-    Returns:
-        dict[str, Any]: Flattened dictionary with prefixed keys.
-    """
-    flattened = {}
-    for key, value in d.items():
-        new_key = f"{prefix}{key}"
-        if isinstance(value, dict):
-            flattened.update(_flatten_dict(value, f"{new_key}_"))
-        else:
-            flattened[new_key] = value
-    return flattened
