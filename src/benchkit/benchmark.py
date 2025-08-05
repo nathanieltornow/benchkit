@@ -9,11 +9,10 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, TypeVar
 
-from benchkit.result_storage import ResultStorage
-
+from .result_storage import ResultStorage
 from .serialize import Serializer, serialize
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("benchkit")
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -27,6 +26,7 @@ def save_benchmark(
     storage: ResultStorage | None = None,
     repeat: int = 1,
     num_retries: int = 0,
+    warm_start: bool = False,
 ) -> Callable[[F], F]:
     """Decorator to benchmark a function with specified serializers and save results.
 
@@ -37,6 +37,7 @@ def save_benchmark(
         storage (Storage | None): Storage backend to save benchmark results. Defaults to ParquetStorage.
         repeat (int): Number of times to repeat the benchmark. Defaults to 1.
         num_retries (int): Number of retries for the benchmark. Defaults to 0.
+        warm_start (bool): Run the benchmark once before saving results to ensure the function is ready.
 
     Returns:
         A decorator for benchmarking.
@@ -49,6 +50,7 @@ def save_benchmark(
     def decorator(func: F) -> F:
         @wraps(func)
         def wrapper(*args: list[Any], **kwargs: dict[str, Any]) -> dict[str, Any]:
+            bench_name_ = bench_name or func.__name__
             sig = inspect.signature(func)
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
@@ -56,7 +58,19 @@ def save_benchmark(
             # Serialize inputs for logging
             inputs = serialize(bound.arguments, serializers)
 
+            if storage.num_results_with_inputs(bench_name=bench_name_, inputs=inputs) >= repeat:
+                msg = f"Skipping benchmark for {bench_name_} with inputs {inputs} as it already has enough results."
+                logger.info(msg)
+                return {}
+
             last_output = {}
+
+            if warm_start:
+                try:
+                    func(*args, **kwargs)
+                except Exception as e:
+                    msg = f"Warm start failed for benchmark '{bench_name_}': {e}"
+                    logger.exception(msg)
 
             for i in range(repeat):
                 success = False
@@ -68,14 +82,11 @@ def save_benchmark(
                         success = True
                         break
                     except Exception as e:
-                        msg = (
-                            f"Error in benchmark '{bench_name or func.__name__}' "
-                            f"(attempt {attempt + 1}/{num_retries + 1}): {e}"
-                        )
+                        msg = f"Error in benchmark '{bench_name_}' (attempt {attempt + 1}/{num_retries + 1}): {e}"
                         logger.exception(msg)
 
                 if not success:
-                    msg = f"All {num_retries + 1} attempts failed for benchmark '{bench_name or func.__name__}'"
+                    msg = f"All {num_retries + 1} attempts failed for benchmark '{bench_name_}'"
                     logger.error(msg)
                     continue  # Skip storing this failed result
 
@@ -85,7 +96,7 @@ def save_benchmark(
                 outputs = serialize(raw_output, serializers)
 
                 storage.save_benchmark(
-                    bench_name=bench_name or func.__name__,
+                    bench_name=bench_name_,
                     inputs=inputs,
                     outputs=outputs,
                     metadata={"m_iter": int(i + 1)},
