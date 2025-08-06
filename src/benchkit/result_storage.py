@@ -9,13 +9,10 @@ import platform
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 import git
 import pandas as pd
-
-if TYPE_CHECKING:
-    from .serialize import Scalar
 
 logger = logging.getLogger("benchkit")
 
@@ -56,28 +53,23 @@ class ResultStorage:
     def save_benchmark(
         self,
         bench_name: str,
-        inputs: dict[str, Scalar],
-        outputs: dict[str, Scalar],
-        metadata: dict[str, Scalar] | None = None,
+        inputs: dict[str, Any],
+        outputs: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Save benchmark results to a Parquet file.
 
         Args:
             bench_name (str): Name of the function being benchmarked.
-            inputs (dict[str, Scalar]): Inputs to the function.
-            outputs (dict[str, Scalar]): Outputs from the function.
-            metadata (dict[str, Scalar] | None): Additional metadata about the benchmark run.
+            inputs (dict[str, Any]): Inputs to the function.
+            outputs (dict[str, Any]): Outputs from the function.
+            metadata (dict[str, Any] | None): Additional metadata about the benchmark run.
         """
         # Flatten nested dictionaries for storage
-        flattened_data = {}
-
-        # Add inputs with prefix
-        for key, value in inputs.items():
-            flattened_data[f"i_{key}"] = value
-
-        # Add outputs with prefix
-        for key, value in outputs.items():
-            flattened_data[f"o_{key}"] = value
+        flattened_data = {
+            **inputs,
+            **outputs,
+        }
 
         flattened_data.update(self.compute_metadata())
         if metadata:
@@ -146,7 +138,7 @@ class ResultStorage:
 
         self._add_parquet_file(bench_name, combined_df)
 
-    def num_results_with_inputs(self, bench_name: str, inputs: dict[str, Scalar]) -> int:
+    def num_results_with_inputs(self, bench_name: str, inputs: dict[str, Any]) -> int:
         """Count the number of results for a specific function with given inputs.
 
         Args:
@@ -182,11 +174,11 @@ class ResultStorage:
         df.to_parquet(file_path, index=False)
 
 
-def compute_input_hash(inputs: dict[str, Scalar]) -> str:
+def compute_input_hash(inputs: dict[str, Any]) -> str:
     """Compute a hash for the given inputs.
 
     Args:
-        inputs (dict[str, Scalar]): Inputs to compute the hash for.
+        inputs (dict[str, Any]): Inputs to compute the hash for.
 
     Returns:
         str: A short hash of the inputs.

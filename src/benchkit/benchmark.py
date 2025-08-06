@@ -26,6 +26,7 @@ def save_benchmark(
     storage: ResultStorage | None = None,
     repeat: int = 1,
     num_retries: int = 0,
+    redo: bool = False,
     warm_start: bool = False,
 ) -> Callable[[F], F]:
     """Decorator to benchmark a function with specified serializers and save results.
@@ -37,6 +38,7 @@ def save_benchmark(
         storage (Storage | None): Storage backend to save benchmark results. Defaults to ParquetStorage.
         repeat (int): Number of times to repeat the benchmark. Defaults to 1.
         num_retries (int): Number of retries for the benchmark. Defaults to 0.
+        redo (bool): If True, redo the benchmark even if results already exist. Defaults to False.
         warm_start (bool): Run the benchmark once before saving results to ensure the function is ready.
 
     Returns:
@@ -58,7 +60,7 @@ def save_benchmark(
             # Serialize inputs for logging
             inputs = serialize(bound.arguments, serializers)
 
-            if storage.num_results_with_inputs(bench_name=bench_name_, inputs=inputs) >= repeat:
+            if not redo and storage.num_results_with_inputs(bench_name=bench_name_, inputs=inputs) >= repeat:
                 msg = f"Skipping benchmark for {bench_name_} with inputs {inputs} as it already has enough results."
                 logger.info(msg)
                 return {}
@@ -102,8 +104,7 @@ def save_benchmark(
                     metadata={"m_iter": int(i + 1)},
                 )
 
-                last_output = outputs
-
+                last_output = raw_output
             return last_output
 
         return wrapper  # type: ignore[return-value]
