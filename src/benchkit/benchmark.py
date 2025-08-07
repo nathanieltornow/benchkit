@@ -8,7 +8,6 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypeVar
 
-from .serialize import Serializer, serialize
 from .storage import get_storage
 
 logger = logging.getLogger("benchkit")
@@ -21,7 +20,6 @@ def save_benchmark(
     _func: F | None = None,
     *,
     bench_name: str | None = None,
-    serializers: dict[type, Serializer] | None = None,
     repeat: int = 1,
     num_retries: int = 0,
     redo: bool = False,
@@ -42,8 +40,6 @@ def save_benchmark(
     Returns:
         A decorator for benchmarking.
     """
-    serializers = serializers or {}
-
     storage = get_storage()
 
     def decorator(func: F) -> F:
@@ -55,7 +51,7 @@ def save_benchmark(
             bound.apply_defaults()
 
             # Serialize inputs for logging
-            inputs = serialize(bound.arguments, serializers)
+            inputs = bound.arguments
 
             if not redo and storage.num_results_with_inputs(bench_name=bench_name_, inputs=inputs) >= repeat:
                 msg = f"Skipping benchmark for {bench_name_} with inputs {inputs} as it already has enough results."
@@ -92,7 +88,7 @@ def save_benchmark(
                 if not isinstance(raw_output, dict):
                     raw_output = {"result": raw_output}
 
-                outputs = serialize(raw_output, serializers)
+                outputs = raw_output
 
                 storage.save_benchmark(
                     bench_name=bench_name_,
