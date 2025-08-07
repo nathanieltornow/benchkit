@@ -194,3 +194,55 @@ def _get_git_commit() -> str:
     except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError):
         logger.warning("Not a git repository or no commit found.")
         return "unknown"
+
+
+class _StorageRegistry:
+    def __init__(self) -> None:
+        """Initialize the storage registry with a default ResultStorage instance."""
+        self._storage = ResultStorage()
+
+    def set(self, storage: ResultStorage) -> None:
+        """Set the storage backend to use.
+
+        Args:
+            storage (ResultStorage): The storage backend to set.
+        """
+        self._storage = storage
+
+    def get(self) -> ResultStorage:
+        """Get the current storage backend.
+
+        Returns:
+            ResultStorage: The current storage backend instance.
+        """
+        return self._storage
+
+    def load(self, name: str) -> pd.DataFrame:
+        return self._storage.load_benchmark(name)
+
+    def save(
+        self,
+        name: str,
+        inputs: dict[str, Any],
+        outputs: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Save benchmark results to the storage.
+
+        Args:
+            name (str): Name of the benchmark.
+            inputs (dict[str, Any]): Input parameters for the benchmark.
+            outputs (dict[str, Any]): Output results of the benchmark.
+            metadata (dict[str, Any] | None): Additional metadata for the benchmark.
+        """
+        self._storage.save_benchmark(name, inputs, outputs, metadata)
+
+
+# Instantiate a single registry
+storage_registry = _StorageRegistry()
+
+# Shortcuts
+set_storage = storage_registry.set
+get_storage = storage_registry.get
+load = storage_registry.load
+save = storage_registry.save

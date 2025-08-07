@@ -6,11 +6,10 @@ import inspect
 import logging
 from collections.abc import Callable
 from functools import wraps
-from pathlib import Path
 from typing import Any, TypeVar
 
-from .result_storage import ResultStorage
 from .serialize import Serializer, serialize
+from .storage import get_storage
 
 logger = logging.getLogger("benchkit")
 
@@ -23,7 +22,6 @@ def save_benchmark(
     *,
     bench_name: str | None = None,
     serializers: dict[type, Serializer] | None = None,
-    storage: ResultStorage | None = None,
     repeat: int = 1,
     num_retries: int = 0,
     redo: bool = False,
@@ -46,8 +44,7 @@ def save_benchmark(
     """
     serializers = serializers or {}
 
-    if storage is None:
-        storage = ResultStorage(Path("bench_results"))
+    storage = get_storage()
 
     def decorator(func: F) -> F:
         @wraps(func)
