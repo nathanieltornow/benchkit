@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import platform
 import uuid
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 import git
 import pandas as pd
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger("benchkit")
 
@@ -20,7 +25,7 @@ logger = logging.getLogger("benchkit")
 class ResultStorage:
     """Storage backend using Parquet files."""
 
-    def __init__(self, db_path: str | Path = "benchmarks") -> None:
+    def __init__(self, db_path: str | Path = "bench_results") -> None:
         """Initialize the Parquet storage backend.
 
         Args:
@@ -48,7 +53,25 @@ class ResultStorage:
         Returns:
             list[str]: List of benchmark names (function names).
         """
-        return [d.name for d in self._db_path.iterdir() if d.is_dir()]
+        return [d.name for d in self._db_path.iterdir() if d.is_dir() and d.name != "archive"]
+
+    def get_archived_benchmarks(self) -> dict[str, list[str]]:
+        """List all archived benchmarks in the storage.
+
+        Returns:
+            dict[str, list[str]]: Dictionary mapping benchmark names to lists paths of their names.
+        """
+        archive_dir = self._db_path / "archive"
+        if not archive_dir.exists():
+            return {}
+
+        archived_benchmarks = {}
+        for bench_dir in archive_dir.iterdir():
+            if bench_dir.is_dir():
+                archived_benchmarks[bench_dir.name] = [
+                    f"archive/{bench_dir.name}/{f.name}" for f in bench_dir.iterdir()
+                ]
+        return archived_benchmarks
 
     def save_benchmark(
         self,
@@ -166,6 +189,27 @@ class ResultStorage:
         """
         return not self._get_parquet_files(bench_name)
 
+    def archive(self, bench_name: str) -> None:
+        """Archive all benchmarks for a specific function.
+
+        Args:
+            bench_name (str): Name of the function to archive.
+        """
+        func_dir = self._db_path / bench_name
+        if not func_dir.exists():
+            msg = f"No benchmarks found for function '{bench_name}'. Archive skipped."
+            logger.warning(msg)
+            return
+
+        archive_dir = self._db_path / "archive" / bench_name / datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M")
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        for file in func_dir.glob("*.parquet"):
+            file.rename(archive_dir / file.name)
+
+        msg = f"Archived benchmarks for function '{bench_name}' to {archive_dir}."
+        logger.info(msg)
+
     def _add_parquet_file(self, bench_name: str, df: pd.DataFrame) -> None:
         func_dir = self._db_path / bench_name
         func_dir.mkdir(parents=True, exist_ok=True)
@@ -246,3 +290,83 @@ set_storage = storage_registry.set
 get_storage = storage_registry.get
 load = storage_registry.load
 save = storage_registry.save
+
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+@overload
+def load_results(
+    result_name: str,
+) -> Callable[[Callable[[pd.DataFrame], R]], Callable[[], R]]: ...
+
+
+@overload
+def load_results(
+    **source_map: str,
+) -> Callable[[Callable[..., R]], Callable[[], R]]: ...
+
+
+def load_results(*args: str, **kwargs: str) -> Callable[[Callable[..., R]], Callable[[], R]]:
+    """Decorator that injects benchmark results into the wrapped function.
+
+    Usage:
+        @load_results("qiskit")  # Injects as first argument
+        def plot_qiskit(df): ...
+
+        @load_results(qiskit="qiskit", lumina="lumina")
+        def plot_both(qiskit, lumina): ...
+
+    Args:
+        *args (str): Positional arguments specifying result names.
+        **kwargs (str): Keyword arguments specifying result names.
+
+    Returns:
+        Callable[[Callable[..., R]], Callable[[], R]]: A decorator that wraps the function
+    """
+
+    def decorator(fn: Callable[..., R]) -> Callable[[], R]:
+        sig = inspect.signature(fn)
+
+        if args and kwargs:
+            msg = "@load_results: Use either positional or keyword arguments, not both."
+            raise TypeError(msg)
+
+        if args:
+            if len(args) != 1:
+                msg = "@load_results: Only one positional argument allowed."
+                raise TypeError(msg)
+            param_names = list(sig.parameters.keys())
+            if len(param_names) != 1:
+                msg = f"Function '{fn.__name__}' must take exactly one argument."
+                raise TypeError(msg)
+            result_name = args[0]
+
+            @wraps(fn)
+            def wrapper() -> R:
+                res_df = load(result_name)
+                return fn(res_df)
+
+            return wrapper
+
+        if kwargs:
+            expected_params = set(sig.parameters.keys())
+            provided_params = set(kwargs.keys())
+
+            missing = provided_params - expected_params
+            if missing:
+                msg = f"Function '{fn.__name__}' is missing parameters: {missing}"
+                raise TypeError(msg)
+
+            @wraps(fn)
+            def wrapper() -> R:
+                dataframes = {name: load(result_name) for name, result_name in kwargs.items()}
+                return fn(**dataframes)
+
+            return wrapper
+
+        msg = "@load_results: Must provide at least one result name."
+        raise TypeError(msg)
+
+    return decorator

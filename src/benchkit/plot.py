@@ -2,127 +2,95 @@
 
 from __future__ import annotations
 
-import inspect
+from collections.abc import Iterable
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, Union, overload
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 import matplotlib.pyplot as plt
-
-from .storage import load
+from matplotlib.figure import Figure
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    import pandas as pd
 
+R = TypeVar("R")
 P = ParamSpec("P")
-F = TypeVar("F", bound=plt.Figure)
-Return = Union[plt.Figure, list[plt.Figure]]
+
+
+def _save_figures(
+    figs: Figure | Iterable[Figure],
+    dir_path: Path | str,
+    fname: str,
+) -> None:
+    """Save figure(s) to PDF in a dated directory structure."""
+    date_str = datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M")
+    out_dir = Path(dir_path) / date_str / fname
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _save_one(fig: object, filename: str) -> None:
+        if not isinstance(fig, Figure):
+            return
+        fig.tight_layout()
+        fig.savefig(out_dir / filename, dpi=300, bbox_inches="tight")
+
+    if isinstance(figs, Figure):
+        _save_one(figs, f"{fname}.pdf")
+    elif isinstance(figs, Iterable):
+        for i, maybe_fig in enumerate(figs):
+            _save_one(maybe_fig, f"{fname}_{i}.pdf")
 
 
 @overload
-def plot_results(
-    data_source: str, *, out_path: str | Path = "figs"
-) -> Callable[[Callable[[pd.DataFrame], Return]], Callable[[], Return]]: ...
+def pplot(
+    _fn: Callable[P, R],
+) -> Callable[P, R]: ...
 
 
 @overload
-def plot_results(
-    *, out_path: str | Path = "figs", **data_sources: str
-) -> Callable[[Callable[..., Return]], Callable[[], Return]]: ...
-
-
-def plot_results(
-    data_source: str | None = None,
+def pplot(
+    _fn: None = None,
     *,
-    out_path: str | Path = "figs",
-    **data_sources: str,
-) -> Callable[[Callable[..., Return]], Callable[[], Return]]:
-    """Decorator to plot and save benchmark results.
+    dir_path: Path | str = "plots",
+    plot_name: str | None = None,
+    custom_rc: dict[str, Any] | None = None,
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
-    Usage:
-        @plot_results("my_results")
-        def single_plot(df):
-            return plt.figure()
 
-        @plot_results(train="train_results", test="test_results")
-        def comparison_plot(train, test):
-            return plt.figure()
+def pplot(
+    _fn: Callable[P, R] | None = None,
+    *,
+    dir_path: Path | str = "plots",
+    plot_name: str | None = None,
+    custom_rc: dict[str, Any] | None = None,
+) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
+    """Decorator to save pretty plots.
 
     Args:
-        data_source: Single result name for functions taking one DataFrame
-        out_path: Directory to save the plots. Defaults to "figs".
-        **data_sources: Named data sources mapping to function parameters
+        dir_path (Path | str): Directory to save plots. Defaults to "plots".
+        plot_name (str | None): Name of the plot file. If None, uses the function name.
+        custom_rc (dict[str, Any] | None): Custom matplotlib rc parameters.
 
     Returns:
-        A decorator that wraps the function to save its plot output.
+        Callable: Decorator function that wraps the plotting function.
     """
+    custom_rc = custom_rc or {}
+    rc_params = latex_rc_params()
+    rc_params.update(custom_rc)
 
-    def decorator(fn: Callable[..., Return]) -> Callable[[], Return]:
-        # Validate parameters at decoration time
-        sig = inspect.signature(fn)
-
-        if data_source is not None:
-            # Single data source mode
-            if len(sig.parameters) != 1:
-                msg = (
-                    f"Function '{fn.__name__}' must take exactly one parameter "
-                    f"when using single data source, got {len(sig.parameters)}"
-                )
-                raise TypeError(msg)
-        else:
-            # Multiple data sources mode - check parameter names match
-            expected_params = set(sig.parameters.keys())
-            provided_params = set(data_sources.keys())
-
-            if provided_params != expected_params:
-                missing = expected_params - provided_params
-                extra = provided_params - expected_params
-                error_parts = []
-                if missing:
-                    error_parts.append(f"missing: {', '.join(missing)}")
-                if extra:
-                    error_parts.append(f"unexpected: {', '.join(extra)}")
-
-                msg = (
-                    f"Function '{fn.__name__}' parameters do not match provided data sources: {', '.join(error_parts)}"
-                )
-                raise TypeError(msg)
-
+    def decorator(fn: Callable[P, R]) -> Callable[P, R]:
         @wraps(fn)
-        def wrapper() -> Return:
-            def _save_figures(figs: list[plt.Figure] | plt.Figure, subdir: str, fname: str) -> None:
-                date_str = datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M")
-                out_dir = Path(out_path) / date_str / subdir
-                out_dir.mkdir(parents=True, exist_ok=True)
-
-                if isinstance(figs, list):
-                    for i, fig in enumerate(figs):
-                        fig.tight_layout()
-                        fig.savefig(out_dir / f"{fname}_{i}.pdf", dpi=300, bbox_inches="tight")
-                else:
-                    figs.tight_layout()
-                    figs.savefig(out_dir / f"{fname}.pdf", dpi=300, bbox_inches="tight")
-
-            with plt.rc_context(rc=latex_rc_params()):
-                if data_source is not None:
-                    # Single data source
-                    loaded_df = load(data_source)
-                    result = fn(loaded_df)
-                    subdir = data_source
-                else:
-                    # Multiple data sources
-                    loaded_data = {name: load(source) for name, source in data_sources.items()}
-                    result = fn(**loaded_data)
-                    subdir = "_".join(data_sources.values())
-
-                _save_figures(result, subdir, fn.__name__)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            with plt.rc_context(rc=rc_params):
+                result = fn(*args, **kwargs)
+                _save_figures(result, dir_path=dir_path, fname=plot_name or fn.__name__)
                 return result
 
         return wrapper
 
+    if callable(_fn):
+        return decorator(_fn)
     return decorator
 
 
@@ -139,6 +107,8 @@ def latex_rc_params() -> dict[str, Any]:
         "ytick.labelsize": 10,
         "legend.fontsize": 10,
         "figure.titlesize": 10,
+        "pdf.fonttype": 42,  # Use Type 1 fonts in PDF
+        "ps.fonttype": 42,  # Use Type 1 fonts in PostScript
     }
 
 
