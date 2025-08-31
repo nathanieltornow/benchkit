@@ -71,7 +71,7 @@ def save(
                 for attempt in range(num_retries + 1):
                     try:
                         if verbose:
-                            rich.print(f":hourglass_flowing_sand: Running benchmark with inputs {inputs}")
+                            rich.print(f":hourglass_flowing_sand: {inputs}")
                         raw_output = func(*args, **kwargs)
                         success = True
                         break
@@ -92,10 +92,7 @@ def save(
                 outputs = raw_output
 
                 if verbose:
-                    rich.print(
-                        ":floppy_disk: Saving benchmark results for "
-                        f"{bench_name_} with \nInputs: {inputs}\nOutputs: {outputs}"
-                    )
+                    rich.print(f":floppy_disk: {outputs}")
 
                 storage.save_benchmark(
                     bench_name=bench_name_,
