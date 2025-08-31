@@ -173,7 +173,6 @@ class ResultStorage:
         """
         if self.is_empty(bench_name):
             return 0
-        self.optimize(bench_name)
         bench_df = self.load_benchmark(bench_name)
         input_hash = compute_input_hash(inputs)
         return len(bench_df[bench_df["m_hash"] == input_hash])
@@ -264,7 +263,7 @@ class _StorageRegistry:
     def load(self, name: str) -> pd.DataFrame:
         return self._storage.load_benchmark(name)
 
-    def save(
+    def dump(
         self,
         name: str,
         inputs: dict[str, Any],
@@ -289,7 +288,7 @@ storage_registry = _StorageRegistry()
 set_storage = storage_registry.set
 get_storage = storage_registry.get
 load = storage_registry.load
-save = storage_registry.save
+dump = storage_registry.dump
 
 
 P = ParamSpec("P")
