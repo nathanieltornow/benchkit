@@ -12,37 +12,14 @@ import matplotlib.pyplot as plt
 import rich
 from matplotlib.figure import Figure
 
+from .config import base_rc_params
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-R = TypeVar("R")
+R = TypeVar("R", bound=Figure | Iterable[Figure])
 P = ParamSpec("P")
-
-
-def _save_figures(
-    figs: Figure | Iterable[Figure],
-    dir_path: Path | str,
-    fname: str,
-    extension: str = "pdf",
-) -> None:
-    """Save figure(s) to PDF in a dated directory structure."""
-    date_str = datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M")
-    out_dir = Path(dir_path) / fname / date_str
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    def _save_one(fig: object, filename: str) -> None:
-        if not isinstance(fig, Figure):
-            return
-        fig.tight_layout()
-        fig.savefig(out_dir / filename, dpi=400, bbox_inches="tight")
-        rich.print(f":floppy_disk: Saved plot to [bold]{out_dir / filename}[/bold]")
-
-    if isinstance(figs, Figure):
-        _save_one(figs, f"{fname}.{extension}")
-    elif isinstance(figs, Iterable):
-        for i, maybe_fig in enumerate(figs):
-            _save_one(maybe_fig, f"{fname}_{i}.{extension}")
 
 
 @overload
@@ -58,6 +35,7 @@ def pplot(
     dir_path: Path | str = "plots",
     plot_name: str | None = None,
     custom_rc: dict[str, Any] | None = None,
+    extensions: list[str] | None = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
@@ -84,7 +62,7 @@ def pplot(
         extensions = ["pdf"]
 
     custom_rc = custom_rc or {}
-    rc_params = latex_rc_params()
+    rc_params = base_rc_params()
     rc_params.update(custom_rc)
 
     def decorator(fn: Callable[P, R]) -> Callable[P, R]:
@@ -108,37 +86,26 @@ def pplot(
     return decorator
 
 
-def latex_rc_params() -> dict[str, Any]:
-    """Return matplotlib rc parameters for LaTeX-style plots."""
-    return {
-        "text.usetex": True,
-        "font.family": "serif",
-        "font.serif": ["Computer Modern"],
-        "font.size": 10,
-        "axes.labelsize": 10,
-        "axes.titlesize": 10,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 10,
-        "figure.titlesize": 10,
-        "pdf.fonttype": 42,  # Use Type 1 fonts in PDF
-        "ps.fonttype": 42,  # Use Type 1 fonts in PostScript
-    }
+def _save_figures(
+    figs: Figure | Iterable[Figure],
+    dir_path: Path | str,
+    fname: str,
+    extension: str = "pdf",
+) -> None:
+    """Save figure(s) to PDF in a dated directory structure."""
+    date_str = datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M")
+    out_dir = Path(dir_path) / fname / date_str
+    out_dir.mkdir(parents=True, exist_ok=True)
 
+    def _save_one(fig: object, filename: str) -> None:
+        if not isinstance(fig, Figure):
+            return
+        fig.tight_layout()
+        fig.savefig(out_dir / filename, dpi=400, bbox_inches="tight")
+        rich.print(f":floppy_disk: Saved plot to [bold]{out_dir / filename}[/bold]")
 
-def wide_figsize() -> tuple[float, float]:
-    """Returns a wide figure size for 2-column plots.
-
-    Returns:
-        tuple[float, float]: A tuple representing the width and height of the figure in inches
-    """
-    return (12, 2.8)
-
-
-def column_figsize() -> tuple[float, float]:
-    """Returns a column figure size for 1-column plots.
-
-    Returns:
-        tuple[float, float]: A tuple representing the width and height of the figure in inches
-    """
-    return (6, 2.8)
+    if isinstance(figs, Figure):
+        _save_one(figs, f"{fname}.{extension}")
+    elif isinstance(figs, Iterable):
+        for i, maybe_fig in enumerate(figs):
+            _save_one(maybe_fig, f"{fname}_{i}.{extension}")
