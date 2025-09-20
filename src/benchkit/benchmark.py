@@ -3,110 +3,74 @@
 from __future__ import annotations
 
 import inspect
-import logging
-from collections.abc import Callable
 from functools import wraps
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec
 
 import rich
 
 from .storage import get_storage
 
-logger = logging.getLogger("benchkit")
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
-F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
+Record = dict[str, Any]
 
 
-def save(
-    _func: F | None = None,
+def store(
+    _func: Callable[P, Record] | None = None,
     *,
     name: str | None = None,
-    repeat: int = 1,
-    num_retries: int = 0,
-    redo: bool = False,
+    min_records: int = 1,
     verbose: bool = False,
-) -> Callable[[F], F]:
-    """Decorator to benchmark a function with specified serializers and save results.
+) -> Callable[[Callable[P, Record]], Callable[P, Record]] | Callable[P, Record]:
+    """Store a function call.
 
     Args:
         _func (F | None): The function to be decorated. If None, returns a decorator.
         name (str | None): Optional name for the benchmark. If None, uses the function name.
-        serializers (dict[type, Serializer] | None): Mapping from types to serialization functions.
-        storage (Storage | None): Storage backend to save benchmark results. Defaults to ParquetStorage.
-        repeat (int): Number of times to repeat the benchmark. Defaults to 1.
-        num_retries (int): Number of retries for the benchmark. Defaults to 0.
-        redo (bool): If True, redo the benchmark even if results already exist. Defaults to False.
+        min_records (int): If the number of existing results is greater than or equal to this, skip the call.
         verbose (bool): If True, print detailed logs. Defaults to False.
 
     Returns:
-        A decorator for benchmarking.
+        Callable[[Callable[P, Record]], Callable[P, Record]]: The decorated function.
     """
     storage = get_storage()
 
-    def decorator(func: F) -> F:
+    def decorator(func: Callable[P, Record]) -> Callable[P, Record]:
         @wraps(func)
-        def wrapper(*args: list[Any], **kwargs: dict[str, Any]) -> dict[str, Any]:
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> Record:
             bench_name_ = name or func.__name__
-            sig = inspect.signature(func)
-            bound = sig.bind(*args, **kwargs)
+            bound = inspect.signature(func).bind(*args, **kwargs)
             bound.apply_defaults()
+            inputs = dict(bound.arguments)
 
-            # Serialize inputs for logging
-            inputs = bound.arguments
+            # optionally drop 'self' / 'cls' here
+            inputs.pop("self", None)
+            inputs.pop("cls", None)
 
-            if not redo and storage.num_results_with_inputs(bench_name=bench_name_, inputs=inputs) >= repeat:
-                msg = f"Skipping benchmark for {bench_name_} with inputs {inputs} as it already has enough results."
-                logger.info(msg)
+            if storage.num_results_with_inputs(bench_name_, inputs) >= min_records:
                 if verbose:
-                    rich.print(msg)
+                    rich.print(f"Skipping store for {bench_name_} with inputs {inputs}")
                 return {}
 
-            last_output = {}
+            if verbose:
+                rich.print(f":hourglass_flowing_sand: {inputs}")
 
-            for i in range(repeat):
-                success = False
-                raw_output = None
+            output = func(*args, **kwargs)
+            if not isinstance(output, dict):
+                msg = f"Unexpected output type for '{bench_name_}': {type(output)}"
+                raise TypeError(msg)
 
-                for attempt in range(num_retries + 1):
-                    try:
-                        if verbose:
-                            rich.print(f":hourglass_flowing_sand: {inputs}")
-                        raw_output = func(*args, **kwargs)
-                        success = True
-                        break
-                    except Exception as e:
-                        msg = f"Error in benchmark '{bench_name_}' (attempt {attempt + 1}/{num_retries + 1}): {e}"
-                        logger.exception(msg)
+            if verbose:
+                rich.print(f":floppy_disk: {output}")
 
-                if not success:
-                    msg = f"All {num_retries + 1} attempts failed for benchmark '{bench_name_}'"
-                    logger.error(msg)
-                    continue  # Skip storing this failed result
+            storage.save(bench_name_, inputs, output)
+            return output
 
-                if not isinstance(raw_output, dict):
-                    msg = f"Unexpected output type for benchmark '{bench_name_}': {type(raw_output)}"
-                    logger.error(msg)
-                    continue  # Skip storing this failed result
-
-                outputs = raw_output
-
-                if verbose:
-                    rich.print(f":floppy_disk: {outputs}")
-
-                storage.save_benchmark(
-                    bench_name=bench_name_,
-                    inputs=inputs,
-                    outputs=outputs,
-                    metadata={"m_iter": int(i + 1)},
-                )
-
-                last_output = raw_output
-            return last_output
-
-        return wrapper  # type: ignore[return-value]
+        return wrapper
 
     if _func is not None:
         return decorator(_func)
-
     return decorator

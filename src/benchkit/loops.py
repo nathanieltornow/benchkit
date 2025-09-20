@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Final, ParamSpec, TypeVar, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -25,21 +25,88 @@ def foreach(**iters: Iterable[Any]) -> Callable[[Callable[P, R]], Callable[P, R]
     """
     names = tuple(iters.keys())
     cols = tuple(iters.values())
+    unset: Final = object()
 
     def deco(fn: Callable[P, R]) -> Callable[P, R]:
         @functools.wraps(fn)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            # If caller fixed all names, just call once
+            # Caller fixed all names -> single call
             if all(n in kwargs for n in names):
                 return fn(*args, **kwargs)
 
-            for row in zip(*cols, strict=True):  # strict zip -> lengths must match
+            last: object = unset
+            for row in zip(*cols, strict=True):  # lengths must match
                 call_kwargs = dict(kwargs)
-                for n, v in zip(names, row):
-                    # allow partial fixing: if user set n, keep it; else use v
-                    call_kwargs.setdefault(n, v)
+                for n, v in zip(names, row, strict=True):
+                    call_kwargs.setdefault(n, v)  # keep user-fixed values
                 last = fn(*args, **call_kwargs)  # type: ignore[arg-type]
+
+            if last is unset:
+                msg = f"foreach(...): iterables produced no rows and not all params {names} were fixed via kwargs."
+                raise ValueError(msg)
+            return cast("R", last)
+
+        return wrapper
+
+    return deco
+
+
+def repeat(n: int) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Decorator to repeat a function n times.
+
+    Args:
+        n (int): Number of times to repeat the function.
+
+    Returns:
+        Callable[[Callable[P, R]], Callable[P, R]]: The decorated function.
+
+    Raises:
+        ValueError: If n is less than 1.
+    """
+    if n < 1:
+        msg = "n must be at least 1"
+        raise ValueError(msg)
+
+    def deco(fn: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(fn)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            last = fn(*args, **kwargs)
+            for _ in range(n - 1):
+                last = fn(*args, **kwargs)
             return last
+
+        return wrapper
+
+    return deco
+
+
+def retry(n: int) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Decorator to retry a function n times if it raises an exception.
+
+    Args:
+        n (int): Number of times to retry the function.
+
+    Returns:
+        Callable[[Callable[P, R]], Callable[P, R]]: The decorated function.
+
+    Raises:
+        ValueError: If n is less than 1.
+    """
+    if n < 1:
+        msg = "n must be at least 1"
+        raise ValueError(msg)
+
+    def deco(fn: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(fn)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            fn_ = fn  # local alias (micro-optimizes attribute lookups)
+            for _ in range(n - 1):
+                try:
+                    return fn_(*args, **kwargs)
+                except Exception:  # noqa: BLE001, PERF203, S110
+                    pass
+            # Final attempt without try/except so the real error propagates
+            return fn_(*args, **kwargs)
 
         return wrapper
 

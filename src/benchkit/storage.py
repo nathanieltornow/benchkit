@@ -3,21 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import logging
 import platform
 import uuid
 from datetime import datetime
-from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
+from typing import Any
 
 import git
 import pandas as pd
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 logger = logging.getLogger("benchkit")
 
@@ -73,7 +68,7 @@ class ResultStorage:
                 ]
         return archived_benchmarks
 
-    def save_benchmark(
+    def save(
         self,
         bench_name: str,
         inputs: dict[str, Any],
@@ -278,94 +273,13 @@ class _StorageRegistry:
             outputs (dict[str, Any]): Output results of the benchmark.
             metadata (dict[str, Any] | None): Additional metadata for the benchmark.
         """
-        self._storage.save_benchmark(name, inputs, outputs, metadata)
+        self._storage.save(name, inputs, outputs, metadata)
 
 
 # Instantiate a single registry
 storage_registry = _StorageRegistry()
 
-# Shortcuts
-set_storage = storage_registry.set
 get_storage = storage_registry.get
+
 load = storage_registry.load
 dump = storage_registry.dump
-
-
-P = ParamSpec("P")
-R = TypeVar("R")
-
-
-@overload
-def load_results(
-    result_name: str,
-) -> Callable[[Callable[[pd.DataFrame], R]], Callable[[], R]]: ...
-
-
-@overload
-def load_results(
-    **source_map: str,
-) -> Callable[[Callable[..., R]], Callable[[], R]]: ...
-
-
-def load_results(*args: str, **kwargs: str) -> Callable[[Callable[..., R]], Callable[[], R]]:
-    """Decorator that injects benchmark results into the wrapped function.
-
-    Usage:
-        @load_results("qiskit")  # Injects as first argument
-        def plot_qiskit(df): ...
-
-        @load_results(qiskit="qiskit", lumina="lumina")
-        def plot_both(qiskit, lumina): ...
-
-    Args:
-        *args (str): Positional arguments specifying result names.
-        **kwargs (str): Keyword arguments specifying result names.
-
-    Returns:
-        Callable[[Callable[..., R]], Callable[[], R]]: A decorator that wraps the function
-    """
-
-    def decorator(fn: Callable[..., R]) -> Callable[[], R]:
-        sig = inspect.signature(fn)
-
-        if args and kwargs:
-            msg = "@load_results: Use either positional or keyword arguments, not both."
-            raise TypeError(msg)
-
-        if args:
-            if len(args) != 1:
-                msg = "@load_results: Only one positional argument allowed."
-                raise TypeError(msg)
-            param_names = list(sig.parameters.keys())
-            if len(param_names) != 1:
-                msg = f"Function '{fn.__name__}' must take exactly one argument."
-                raise TypeError(msg)
-            result_name = args[0]
-
-            @wraps(fn)
-            def wrapper() -> R:
-                res_df = load(result_name)
-                return fn(res_df)
-
-            return wrapper
-
-        if kwargs:
-            expected_params = set(sig.parameters.keys())
-            provided_params = set(kwargs.keys())
-
-            missing = provided_params - expected_params
-            if missing:
-                msg = f"Function '{fn.__name__}' is missing parameters: {missing}"
-                raise TypeError(msg)
-
-            @wraps(fn)
-            def wrapper() -> R:
-                dataframes = {name: load(result_name) for name, result_name in kwargs.items()}
-                return fn(**dataframes)
-
-            return wrapper
-
-        msg = "@load_results: Must provide at least one result name."
-        raise TypeError(msg)
-
-    return decorator
