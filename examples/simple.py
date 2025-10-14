@@ -6,25 +6,27 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 
-from benchkit import load_results, pplot, save_benchmark
-
-if TYPE_CHECKING:
-    import pandas as pd
+import benchkit as bk
 
 
-@save_benchmark(repeat=3)
-def my_benchmark_function(x: int, y: int) -> dict[str, int]:
-    """A simple benchmark function that adds two numbers."""  # noqa: DOC201
-    return {"result": x + y, "multiply": x * y}
+@bk.foreach(n=[1, 2, 3])
+@bk.foreach(lr=[0.01, 0.1])
+@bk.catch_failures(default={"acc": 0.0, "loss": float("inf")})
+@bk.log("hi")
+def train_model(n: int, lr: float) -> dict[str, float]:
+    """Simulate training a model and return accuracy and loss.
+
+    Args:
+        n (int): Number of epochs.
+        lr (float): Learning rate.
+
+    Returns:
+        dict[str, float]: Dictionary with accuracy and loss.
+    """
+    # Simulate some training logic
+    acc = 0.8 + 0.02 * n - 0.01 * lr
+    loss = 0.5 - 0.03 * n + 0.01 * lr
+    return {"acc": acc, "loss": loss}
 
 
-@load_results("archive/my_benchmark_function/2025-08-07-16-11")
-@pplot
-def plot_my_benchmark(df: pd.DataFrame) -> plt.Figure:
-    """Plot the results of the benchmark."""  # noqa: DOC201
-    fig, ax = plt.subplots()
-    df.plot(x="m_iter", y="result", kind="line", ax=ax, marker="o")
-    ax.set_title("Benchmark Results")
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("Result")
-    return fig
+train_model()
