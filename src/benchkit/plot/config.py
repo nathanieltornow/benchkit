@@ -1,4 +1,4 @@
-"""Gneral plotting configuration."""
+"""General plotting configuration."""
 
 from __future__ import annotations
 

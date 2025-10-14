@@ -100,7 +100,7 @@ explicit_package_bases = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["qiskit.*", "matplotlib.*", "git.*", "pandas.*", "rich.*", "typer.*"]
+module = ["qiskit.*", "matplotlib.*", "git.*", "pandas.*", "rich.*", "typer.*", "cycler.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

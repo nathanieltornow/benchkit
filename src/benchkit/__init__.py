@@ -4,21 +4,19 @@ from __future__ import annotations
 
 from ._version import version as __version__
 from ._version import version_tuple as version_info
-from .benchmark import store
-from .loops import foreach
+from .config import path
+from .logging import load, log
+from .loops import catch_failures, foreach, retry
 from .plot import pplot
-from .storage import ResultStorage, dump, get_storage, load, load_results, set_storage
 
 __all__ = [
-    "ResultStorage",
     "__version__",
-    "dump",
+    "catch_failures",
     "foreach",
-    "get_storage",
     "load",
-    "load_results",
+    "log",
+    "path",
     "pplot",
-    "store",
-    "set_storage",
+    "retry",
     "version_info",
 ]

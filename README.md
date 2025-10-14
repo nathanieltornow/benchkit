@@ -10,11 +10,6 @@ pip install benchkit
 
 ## Saving benchmark results
 
-
-
 ## CLI
 
-
 ## Plotting
-
-

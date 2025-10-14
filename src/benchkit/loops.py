@@ -51,35 +51,6 @@ def foreach(**iters: Iterable[Any]) -> Callable[[Callable[P, R]], Callable[P, R]
     return deco
 
 
-def repeat(n: int) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Decorator to repeat a function n times.
-
-    Args:
-        n (int): Number of times to repeat the function.
-
-    Returns:
-        Callable[[Callable[P, R]], Callable[P, R]]: The decorated function.
-
-    Raises:
-        ValueError: If n is less than 1.
-    """
-    if n < 1:
-        msg = "n must be at least 1"
-        raise ValueError(msg)
-
-    def deco(fn: Callable[P, R]) -> Callable[P, R]:
-        @functools.wraps(fn)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            last = fn(*args, **kwargs)
-            for _ in range(n - 1):
-                last = fn(*args, **kwargs)
-            return last
-
-        return wrapper
-
-    return deco
-
-
 def retry(n: int) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Decorator to retry a function n times if it raises an exception.
 
@@ -107,6 +78,35 @@ def retry(n: int) -> Callable[[Callable[P, R]], Callable[P, R]]:
                     pass
             # Final attempt without try/except so the real error propagates
             return fn_(*args, **kwargs)
+
+        return wrapper
+
+    return deco
+
+
+def catch_failures(
+    default: R,
+    callback: Callable[[Exception], None] | None = None,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Decorator to catch all exceptions and return a default value.
+
+    Args:
+        default (R): The default value to return if an exception is raised.
+        callback (Callable[[Exception], None] | None): Optional callback to be called with the exception.
+
+    Returns:
+        Callable[[Callable[P, R]], Callable[P, R]]: The decorated function.
+    """
+
+    def deco(fn: Callable[P, R]) -> Callable[P, R]:
+        @functools.wraps(fn)
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:  # noqa: BLE001
+                if callback is not None:
+                    callback(e)
+                return default
 
         return wrapper
 
