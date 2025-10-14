@@ -119,6 +119,6 @@ def _get_git_commit() -> str:
 def _is_dirty() -> bool:
     try:
         repo = git.Repo(search_parent_directories=True)
-        return bool(repo.is_dirty())
+        return bool(repo.is_dirty() or repo.untracked_files)
     except (git.exc.InvalidGitRepositoryError, git.exc.NoSuchPathError):
         return True
