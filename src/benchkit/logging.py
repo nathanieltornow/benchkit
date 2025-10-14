@@ -40,11 +40,10 @@ def log(log_name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
 
     if _is_dirty():
         warnings.warn(
-            "You are logging with uncommitted changes, therefore logging to a scratch file.",
+            "You are logging with uncommitted changes. Please make sure to commit your changes for reproducibility.",
             RuntimeWarning,
             stacklevel=2,
         )
-        log_file = f"{log_name}_dirty.jsonl"
 
     log_path = log_dir / log_file
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,12 +86,11 @@ def log(log_name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
     return deco
 
 
-def load(log_name: str, *, dirty: bool = False) -> pd.DataFrame:
+def load(log_name: str) -> pd.DataFrame:
     """Load log entries from a log file.
 
     Args:
         log_name (str): Name of the log.
-        dirty (bool, optional): Whether to load from a dirty log file. Defaults to False.
 
     Returns:
         pd.DataFrame: DataFrame containing the log entries.
@@ -101,8 +99,6 @@ def load(log_name: str, *, dirty: bool = False) -> pd.DataFrame:
         FileNotFoundError: If the log file does not exist.
     """
     log_file = f"{log_name}.jsonl"
-    if dirty:
-        log_file = f"{log_name}_dirty.jsonl"
     log_path = data_path / "logs" / log_file
 
     if not log_path.exists():
