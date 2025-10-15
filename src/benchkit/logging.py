@@ -8,15 +8,12 @@ import inspect
 import json
 import platform
 import uuid
-import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, TextIO, TypeVar
 
 import git
 import pandas as pd
 import rich
-
-from benchkit.config import data_path
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,30 +22,26 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def log(log_name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
+def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Decorator to log function calls and their results.
 
     Args:
-        log_name (str): Name of the log file (without extension).
+        file: Path or open file handle where log entries should be written.
 
     Returns:
-        Callable[[Callable[P, R]], Callable[P, R]]: The decorated function.
+        Decorator for logging function calls and results.
     """
     init_time = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    log_dir = data_path / "logs"
-    log_file = f"{log_name}.jsonl"
 
-    if _is_dirty():
-        warnings.warn(
-            "You are logging with uncommitted changes. Please make sure to commit your changes for reproducibility.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
-    log_path = log_dir / log_file
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
-    rich.print(f"[bold green]Logging to[/bold green] [cyan]{log_path.resolve()}[/cyan]")
+    # Normalize to a Path if not already a file handle
+    if isinstance(file, (str, Path)):
+        log_path = Path(file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        rich.print(f"[bold green]Logging to[/bold green] [cyan]{log_path.resolve()}[/cyan]")
+        file_handle: TextIO | None = None
+    else:
+        log_path = None
+        file_handle = file
 
     def deco(fn: Callable[P, R]) -> Callable[P, R]:
         sig = inspect.signature(fn)
@@ -58,7 +51,6 @@ def log(log_name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             config = dict(bound.arguments)
-            # remove self/cls if it's a method/classmethod
             config.pop("self", None)
             config.pop("cls", None)
 
@@ -68,7 +60,6 @@ def log(log_name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
                 "config": config,
                 "result": result,
                 "id": str(uuid.uuid4())[:8],
-                "log_name": log_name,
                 "func_name": fn.__name__,
                 "init_time": init_time,
                 "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -76,8 +67,15 @@ def log(log_name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
                 "git_commit": _get_git_commit(),
             }
 
-            with Path(log_path).open("a", encoding="utf-8") as f:
-                f.write(json.dumps(entry) + "\n")
+            line = json.dumps(entry) + "\n"
+
+            if file_handle is not None:
+                file_handle.write(line)
+                file_handle.flush()
+            else:
+                assert log_path is not None
+                with log_path.open("a", encoding="utf-8") as f:
+                    f.write(line)
 
             return result
 
@@ -86,26 +84,31 @@ def log(log_name: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
     return deco
 
 
-def load(log_name: str) -> pd.DataFrame:
-    """Load log entries from a log file.
+def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
+    """Load log entries from a JSONL log file.
 
     Args:
-        log_name (str): Name of the log.
+        log_path (str | Path): Path to the log file.
+        normalize (bool, optional): Whether to flatten nested dicts into columns.
 
     Returns:
-        pd.DataFrame: DataFrame containing the log entries.
+        pd.DataFrame: DataFrame of log entries.
 
     Raises:
         FileNotFoundError: If the log file does not exist.
     """
-    log_file = f"{log_name}.jsonl"
-    log_path = data_path / "logs" / log_file
+    log_path = Path(log_path)
 
     if not log_path.exists():
         msg = f"Log file {log_path} does not exist."
         raise FileNotFoundError(msg)
 
-    return pd.json_normalize(pd.read_json(log_path, lines=True).to_dict(orient="records"))
+    log_df = pd.read_json(log_path, lines=True)
+
+    if normalize:
+        log_df = pd.json_normalize(log_df.to_dict(orient="records"))
+
+    return log_df
 
 
 def _get_git_commit() -> str:
