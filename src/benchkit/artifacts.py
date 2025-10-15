@@ -6,9 +6,7 @@ import datetime as dt
 import uuid
 from pathlib import Path
 
-from benchkit.config import data_path
-
-ARTIFACT_ROOT = data_path / "artifacts"
+ARTIFACT_ROOT = Path("benchkit/artifacts")
 ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
 
 
