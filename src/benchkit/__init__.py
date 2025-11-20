@@ -8,6 +8,7 @@ from .artifacts import artifact, load_artifact
 from .logging import load_log, log
 from .loops import catch_failures, foreach, retry
 from .plot import pplot
+from .timeout import timeout
 
 __all__ = [
     "__version__",
@@ -19,5 +20,6 @@ __all__ = [
     "log",
     "pplot",
     "retry",
+    "timeout",
     "version_info",
 ]
