@@ -32,6 +32,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "cloudpickle>=3.1.2",
     "fastparquet>=2024.11.0",
     "gitpython>=3.1.45",
     "matplotlib>=3.9.4",

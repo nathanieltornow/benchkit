@@ -1,10 +1,12 @@
-"""Production-safe process-based timeout decorator for Benchkit."""
+"""Kill-safe timeout that works with decorated functions via cloudpickle."""
 
 from __future__ import annotations
 
 import functools
 import multiprocessing as mp
-from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, ParamSpec, TypeVar
+
+import cloudpickle  # <— new
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -13,72 +15,50 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def _run_and_capture(
-    fn: Callable[P, R],
-    args: tuple,
-    kwargs: dict,
-    q: mp.Queue,
-) -> None:
-    """Worker execution inside separate process.
-
-    Args:
-        fn: Function to execute.
-        args: Positional arguments for `fn`.
-        kwargs: Keyword arguments for `fn`.
-        q: Queue to store result or exception.
-    """
+def _run_cloudpickled(fn_bytes: bytes, args: tuple, kwargs: dict, q: mp.Queue) -> None:
+    """Load callable from bytes and execute in worker."""
+    fn: Callable[..., R] = cloudpickle.loads(fn_bytes)
     try:
-        res = fn(*args, **kwargs)
-        q.put((True, res))
+        q.put((True, fn(*args, **kwargs)))
     except BaseException as e:  # noqa: BLE001
         q.put((False, e))
 
 
-def timeout(
-    seconds: float,
-    default: R,
-) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Decorator to timeout a function after `seconds` seconds.
+def timeout(seconds: float) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Decorator to timeout a function after N seconds using multiprocessing.
 
     Args:
         seconds: Number of seconds to wait before timing out.
-        default: Value to return if timeout occurs.
 
     Returns:
-        Decorated function that returns `default` on timeout.
+        Decorated function that raises TimeoutError if it runs too long.
 
     Raises:
-        ValueError: If `seconds` is not greater than 0.
+        ValueError: If seconds is not positive.
     """
     if seconds <= 0:
         msg = "seconds must be > 0"
         raise ValueError(msg)
 
     def deco(fn: Callable[P, R]) -> Callable[P, R]:
+        fn_bytes = cloudpickle.dumps(fn)  # serialize *this exact wrapper chain*
 
         @functools.wraps(fn)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             q: mp.Queue = mp.Queue(maxsize=1)
-            p = mp.Process(target=_run_and_capture, args=(fn, args, kwargs, q))
+            p = mp.Process(target=_run_cloudpickled, args=(fn_bytes, args, kwargs, q))
             p.start()
             p.join(seconds)
 
             if p.is_alive():
-                # timeout: kill worker
                 p.terminate()
                 p.join()
-                return default
+                msg = f"Function '{fn.__name__}' timed out after {seconds}s"
+                raise TimeoutError(msg)
 
-            # worker finished: load result
-            try:
-                success, payload = q.get_nowait()
-            except Exception:  # noqa: BLE001
-                # abnormal case: nothing in queue
-                return default
-
+            success, payload = q.get_nowait()
             if success:
-                return cast("R", payload)
-            # worker threw an exception → rethrow it here
+                return payload
             raise payload
 
         return wrapper
