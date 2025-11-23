@@ -17,49 +17,57 @@ def bar_comparison(
     *,
     error: Literal["std", "sem", "ci95"] | None = "ci95",
 ) -> None:
-    """Plot a bar comparison on the given Axes.
 
-    Args:
-        ax (Axes): Matplotlib Axes to plot on.
-        results (pd.DataFrame): DataFrame containing the results data.
-        keys (list[str]): List of column names for the bars.
-        group_key (str): Column name for grouping the bars.
-        error (Literal["std", "sem", "ci95"] | None, optional): Type of error bars to display.
-            "std" for standard deviation, "sem" for standard error of the mean,
-            "ci95" for 95% confidence interval. If None, no error bars are shown. Defaults to "ci95".
-    """
-    groups = sorted(results[group_key].dropna().unique(), key=lambda g: get_style(str(g)).sort_order)
-    x = range(len(keys))
+    groups = results[group_key].dropna().unique()
+
+    # x-axis = groups
+    x = range(len(groups))
+
     total_width = 0.8
-    num_groups = len(groups)
-    bar_width = total_width / num_groups
-    offsets = [(i - num_groups / 2) * bar_width + bar_width / 2 for i in range(num_groups)]
+    num_keys = len(keys)
+    bar_width = total_width / num_keys
 
-    for offset, group in zip(offsets, groups, strict=True):
-        group_data = results[results[group_key] == group]
-        means = [group_data[key].mean() for key in keys]
+    # offsets based on keys, not groups
+    offsets = [(i - num_keys / 2) * bar_width + bar_width / 2 for i in range(num_keys)]
+
+    keys = sorted(
+        keys,
+        key=lambda k: get_style(str(k)).sort_order,
+    )
+
+    for offset, key in zip(offsets, keys, strict=True):
+        means = [results[results[group_key] == g][key].mean() for g in groups]
 
         errors = None
         match error:
             case "std":
-                errors = [group_data[key].std() for key in keys]
+                errors = [results[results[group_key] == g][key].std() for g in groups]
             case "sem":
-                errors = [group_data[key].sem() for key in keys]
+                errors = [results[results[group_key] == g][key].sem() for g in groups]
             case "ci95":
-                errors = [1.96 * group_data[key].sem() if len(group_data[key]) > 1 else 0 for key in keys]
+                errors = [
+                    (
+                        1.96 * results[results[group_key] == g][key].sem()
+                        if len(results[results[group_key] == g][key]) > 1
+                        else 0
+                    )
+                    for g in groups
+                ]
 
-        config = get_style(str(group))
+        config = get_style(str(key))
 
         ax.bar(
             [xi + offset for xi in x],
             means,
             width=bar_width,
-            label=group,
+            label=key,
             yerr=errors,
             hatch=config.hatch,
             facecolor=config.color,
+            edgecolor="black",
+            linewidth=1.5,
             error_kw=default_error_kw() if errors is not None else None,
         )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(keys)
+    ax.set_xticklabels(groups)
