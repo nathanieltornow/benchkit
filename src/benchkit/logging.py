@@ -117,11 +117,14 @@ def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
 
 def join_logs(
     log_paths: list[str | Path],
+    *,
+    how: str = "outer",
 ) -> pd.DataFrame:
     """Join multiple log files on their overlapping config columns.
 
     Args:
         log_paths (list[str | Path]): List of log file paths.
+        how (str, optional): Merge method. Defaults to "outer".
 
     Returns:
         pd.DataFrame: Merged DataFrame of log entries.
@@ -153,8 +156,7 @@ def join_logs(
             raise ValueError(msg)
 
         # Merge on overlapping config cols only
-        merged = merged.merge(df, on=config_cols, how="inner")
-
+        merged = merged.merge(df, on=config_cols, how=how)
     return merged
 
 
