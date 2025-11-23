@@ -1,4 +1,4 @@
-"""Timeout decorator using persistent worker subprocesses."""
+"""Timeout decorator using persistent, lazily-started worker subprocesses."""
 
 from __future__ import annotations
 
@@ -16,94 +16,120 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+# ===============================================================
+# Worker process entrypoint
+# ===============================================================
 def _worker_loop(conn: Connection) -> None:
-    """Entry point for persistent worker subprocess.
+    """Entry point for worker subprocess.
 
-    Continuously receives `(fn_bytes, args, kwargs)` tuples, executes the
-    deserialized function, and sends back `(success, payload)` where:
+    Repeatedly receives ``(fn_bytes, args, kwargs)`` and sends back
+    ``(success, payload)`` where:
 
-    - success = True, payload = return value
-    - success = False, payload = exception
-
-    Args:
-        conn: Connection to the parent process.
+    - ``success`` is ``True`` → ``payload`` is return value
+    - ``success`` is ``False`` → ``payload`` is an exception
     """
     try:
         while True:
-            data = conn.recv()  # blocking call
+            data = conn.recv()  # blocking
             if data == "STOP":
                 return
 
             fn_bytes, args, kwargs = data
+
             try:
-                fn: Callable[..., Any] = cloudpickle.loads(fn_bytes)
+                fn = cloudpickle.loads(fn_bytes)
                 result = fn(*args, **kwargs)
                 conn.send((True, result))
-            except BaseException as exc:  # noqa: BLE001
+            except Exception as exc:
                 conn.send((False, exc))
+
     except EOFError:
         # Parent died or pipe closed
         return
 
 
+# ===============================================================
+# Persistent worker with lazy start
+# ===============================================================
 class Worker:
-    """Persistent worker subprocess executing a cloudpickled function."""
+    """A persistent worker subprocess that executes cloudpickled functions."""
 
     def __init__(self, fn_bytes: bytes) -> None:
-        """Initialize worker with cloudpickled function.
+        """Initialize Worker with a cloudpickled function.
 
         Args:
-            fn_bytes: Cloudpickled function bytes.
+            fn_bytes (bytes): Cloudpickled function to execute inside worker.
         """
         self.fn_bytes = fn_bytes
-        self.conn: Connection
-        self.proc: mp.Process
-        self._start_worker()
+        self.conn: Connection | None = None
+        self.proc: mp.Process | None = None
+
+    # --------------------------
+    # Worker lifecycle
+    # --------------------------
+    def ensure_started(self) -> None:
+        """Start worker lazily if it's not running."""
+        if self.proc is None or not self.proc.is_alive():
+            self._start_worker()
 
     def _start_worker(self) -> None:
-        """Start a new worker subprocess."""
+        """Create and start a worker subprocess."""
         ctx = mp.get_context("spawn")
         parent_conn, child_conn = ctx.Pipe()
+
         self.conn = parent_conn
         self.proc = ctx.Process(target=_worker_loop, args=(child_conn,))
         self.proc.start()
 
     def restart(self) -> None:
-        """Restart worker after timeout or crash."""
+        """Restart the worker after timeout or crash."""
         self.kill()
         self._start_worker()
 
     def kill(self) -> None:
-        """Terminate worker."""
-        try:  # noqa: SIM105
-            self.conn.send("STOP")
-        except Exception:  # noqa: BLE001, S110
-            pass
+        """Terminate worker safely."""
+        if self.conn is not None:
+            try:  # noqa: SIM105
+                self.conn.send("STOP")
+            except Exception:  # noqa: BLE001, S110
+                # Worker may already be dead or pipe closed
+                pass
 
-        self.proc.terminate()
-        self.proc.join()
+        if self.proc is not None:
+            self.proc.terminate()
+            self.proc.join()
 
+        self.conn = None
+        self.proc = None
+
+    # --------------------------
+    # Execute a function inside worker
+    # --------------------------
     def call(
-        self, args: tuple[Any, ...], kwargs: dict[str, Any], timeout: float
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        timeout: float,
     ) -> tuple[bool, Any]:
-        """Execute function in worker with a blocking poll timeout.
+        """Execute the wrapped function inside worker with a timeout.
 
         Args:
-            args: Positional arguments to pass to function.
-            kwargs: Keyword arguments to pass to function.
-            timeout: Timeout duration (in seconds).
+            args (tuple[Any, ...]): Positional arguments for the function.
+            kwargs (dict[str, Any]): Keyword arguments for the function.
+            timeout (float): Timeout in seconds.
 
         Returns:
-            Tuple of (success, payload) where:
-            - success = True, payload = return value
-            - success = False, payload = exception
+            tuple[bool, Any]: Tuple where first element indicates success,
+            and second element is either the return value or an exception.
 
         Raises:
-            TimeoutError: If timeout occurs.
+            TimeoutError: If the call times out.
         """
+        self.ensure_started()
+        assert self.conn is not None
+
         self.conn.send((self.fn_bytes, args, kwargs))
 
-        # Blocking wait—no active polling required.
         if not self.conn.poll(timeout):
             msg = f"Worker timed out after {timeout} seconds"
             raise TimeoutError(msg)
@@ -111,26 +137,35 @@ class Worker:
         return self.conn.recv()
 
 
-def timeout(seconds: float, default: R) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Decorator adding a kill-safe timeout using a persistent worker subprocess.
+# ===============================================================
+# Public timeout decorator
+# ===============================================================
+def timeout(
+    seconds: float,
+    default: R,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Decorator applying a subprocess timeout to a function.
 
     Args:
-        seconds: Timeout duration (in seconds).
-        default: Value to return on timeout.
+        seconds (float): Timeout in seconds.
+        default (R): Default return value on timeout.
 
     Returns:
-        A decorated function whose calls are executed in a persistent
-        worker subprocess with timeout enforcement.
+        Callable[[Callable[P, R]], Callable[P, R]]: Decorated function.
 
     Raises:
-        ValueError: If `seconds` is non-positive.
+        ValueError: If seconds is not > 0.
     """
     if seconds <= 0:
         msg = "seconds must be > 0"
         raise ValueError(msg)
 
     def deco(fn: Callable[P, R]) -> Callable[P, R]:
-        fn_bytes = cloudpickle.dumps(fn)
+        # Use a wrapper instead of raw function to avoid re-import loops
+        def safe_fn(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            return fn(*args, **kwargs)
+
+        fn_bytes = cloudpickle.dumps(safe_fn)
         worker = Worker(fn_bytes)
 
         @functools.wraps(fn)
@@ -141,16 +176,14 @@ def timeout(seconds: float, default: R) -> Callable[[Callable[P, R]], Callable[P
                 if success:
                     return payload
 
-                # The worker executed, but function raised an exception
+                # Function raised inside worker
                 raise payload  # noqa: TRY301
 
             except TimeoutError:
-                # Timeout → restart worker, return default
                 worker.restart()
                 return default
 
             except Exception:
-                # Worker crashed → restart worker, raise to caller
                 worker.restart()
                 raise
 

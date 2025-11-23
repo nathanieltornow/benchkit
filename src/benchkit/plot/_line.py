@@ -85,7 +85,6 @@ def line_comparison(
                 linewidth=1.0,
                 capsize=3,
                 zorder=style.zorder - 1,
-                error_kw=default_error_kw(),
             )
 
     ax.set_xticks(x)
