@@ -1,9 +1,9 @@
-"""Timeout decorator."""
+"""Production-safe process-based timeout decorator for Benchkit."""
 
 from __future__ import annotations
 
 import functools
-import threading
+import multiprocessing as mp
 from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 
 if TYPE_CHECKING:
@@ -13,63 +13,73 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-class _Timeout(threading.Thread):
-    """Thread wrapper that captures return value or exception."""
+def _run_and_capture(
+    fn: Callable[P, R],
+    args: tuple,
+    kwargs: dict,
+    q: mp.Queue,
+) -> None:
+    """Worker execution inside separate process.
 
-    def __init__(self, fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> None:
-        super().__init__(daemon=True)
-        self.fn = fn
-        self.args = args
-        self.kwargs = kwargs
-        self.result: R | None = None
-        self.exc: BaseException | None = None
-
-    def run(self) -> None:
-        try:
-            self.result = self.fn(*self.args, **self.kwargs)
-        except BaseException as e:  # noqa: BLE001
-            self.exc = e
+    Args:
+        fn: Function to execute.
+        args: Positional arguments for `fn`.
+        kwargs: Keyword arguments for `fn`.
+        q: Queue to store result or exception.
+    """
+    try:
+        res = fn(*args, **kwargs)
+        q.put((True, res))
+    except BaseException as e:  # noqa: BLE001
+        q.put((False, e))
 
 
 def timeout(
     seconds: float,
     default: R,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Decorator that limits the execution time of a function.
-
-    If the function does not finish within ``seconds``, return ``default``.
+    """Decorator to timeout a function after `seconds` seconds.
 
     Args:
-        seconds (float): Timeout duration in seconds.
-        default (R): Value returned if timeout occurs.
+        seconds: Number of seconds to wait before timing out.
+        default: Value to return if timeout occurs.
 
     Returns:
-        Callable[[Callable[P, R]], Callable[P, R]]: The decorated function.
+        Decorated function that returns `default` on timeout.
 
     Raises:
-        ValueError: If seconds <= 0.
+        ValueError: If `seconds` is not greater than 0.
     """
     if seconds <= 0:
         msg = "seconds must be > 0"
         raise ValueError(msg)
 
     def deco(fn: Callable[P, R]) -> Callable[P, R]:
+
         @functools.wraps(fn)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            worker = _Timeout(fn, *args, **kwargs)
-            worker.start()
-            worker.join(timeout=seconds)
+            q: mp.Queue = mp.Queue(maxsize=1)
+            p = mp.Process(target=_run_and_capture, args=(fn, args, kwargs, q))
+            p.start()
+            p.join(seconds)
 
-            # Timeout → return default
-            if worker.is_alive():
+            if p.is_alive():
+                # timeout: kill worker
+                p.terminate()
+                p.join()
                 return default
 
-            # If finished but raised → re-raise
-            if worker.exc is not None:
-                raise worker.exc
+            # worker finished: load result
+            try:
+                success, payload = q.get_nowait()
+            except Exception:  # noqa: BLE001
+                # abnormal case: nothing in queue
+                return default
 
-            # Must have produced a result
-            return cast("R", worker.result)
+            if success:
+                return cast("R", payload)
+            # worker threw an exception → rethrow it here
+            raise payload
 
         return wrapper
 
