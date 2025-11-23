@@ -24,14 +24,15 @@ def _run_cloudpickled(fn_bytes: bytes, args: tuple, kwargs: dict, q: mp.Queue) -
         q.put((False, e))
 
 
-def timeout(seconds: float) -> Callable[[Callable[P, R]], Callable[P, R]]:
+def timeout(seconds: float, default: R) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Decorator to timeout a function after N seconds using multiprocessing.
 
     Args:
         seconds: Number of seconds to wait before timing out.
+        default: Value to return on timeout.
 
     Returns:
-        Decorated function that raises TimeoutError if it runs too long.
+        Callable: Decorated function that returns `default` on timeout.
 
     Raises:
         ValueError: If seconds is not positive.
@@ -53,8 +54,7 @@ def timeout(seconds: float) -> Callable[[Callable[P, R]], Callable[P, R]]:
             if p.is_alive():
                 p.terminate()
                 p.join()
-                msg = f"Function '{fn.__name__}' timed out after {seconds}s"
-                raise TimeoutError(msg)
+                return default
 
             success, payload = q.get_nowait()
             if success:
