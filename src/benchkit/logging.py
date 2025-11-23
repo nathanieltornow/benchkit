@@ -37,7 +37,9 @@ def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]
     if isinstance(file, (str, Path)):
         log_path = Path(file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        rich.print(f"[bold green]Logging to[/bold green] [cyan]{log_path.resolve()}[/cyan]")
+        rich.print(
+            f"[bold green]Logging to[/bold green] [cyan]{log_path.resolve()}[/cyan]"
+        )
         file_handle: TextIO | None = None
     else:
         log_path = None
@@ -62,7 +64,9 @@ def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]
                 "id": str(uuid.uuid4())[:8],
                 "func_name": fn.__name__,
                 "init_time": init_time,
-                "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "timestamp": dt.datetime.now(dt.timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
                 "host": platform.node(),
                 "git_commit": _get_git_commit(),
             }
@@ -109,6 +113,49 @@ def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
         log_df = pd.json_normalize(log_df.to_dict(orient="records"))
 
     return log_df
+
+
+def join_logs(
+    log_paths: list[str | Path],
+) -> pd.DataFrame:
+    """Join multiple log files on their overlapping config columns.
+
+    Args:
+        log_paths (list[str | Path]): List of log file paths.
+
+    Returns:
+        pd.DataFrame: Merged DataFrame of log entries.
+
+    Raises:
+        ValueError: If there are no overlapping config columns between logs.
+    """
+    # Load all logs as normalized DataFrames
+    dfs = [load_log(p, normalize=True) for p in log_paths]
+
+    if not dfs:
+        return pd.DataFrame()
+
+    # Start with the first df
+    merged = dfs[0]
+
+    # Iteratively merge with all subsequent dfs
+    for df in dfs[1:]:
+
+        # Find shared config.* columns
+        config_cols = sorted(set(merged.columns).intersection(df.columns))
+        config_cols = [c for c in config_cols if c.startswith("config.")]
+
+        if not config_cols:
+            msg = (
+                f"No overlapping config columns between logs:\n"
+                f"{merged.columns}\n---\n{df.columns}"
+            )
+            raise ValueError(msg)
+
+        # Merge on overlapping config cols only
+        merged = merged.merge(df, on=config_cols, how="inner")
+
+    return merged
 
 
 def _get_git_commit() -> str:
