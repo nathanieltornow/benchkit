@@ -11,7 +11,16 @@ from cycler import cycler
 
 def colors() -> list[str]:
     """Return the default color cycle."""
-    return ["#4477AA", "#EE6677", "#228833", "#CCBB44", "#66CCEE", "#AA3377", "#BBBBBB", "#000000"]
+    return [
+        "#4477AA",
+        "#EE6677",
+        "#228833",
+        "#CCBB44",
+        "#66CCEE",
+        "#AA3377",
+        "#BBBBBB",
+        "#000000",
+    ]
 
 
 def hatches() -> list[str]:
@@ -21,19 +30,21 @@ def hatches() -> list[str]:
 
 def base_rc_params() -> dict[str, Any]:
     """Return matplotlib rc parameters for LaTeX-style plots."""
+    font_size = 7
     return {
         "axes.prop_cycle": cycler("color", colors()),
         # --- LaTeX text ---
         "text.usetex": True,
         "font.family": "serif",
         "font.serif": ["Computer Modern"],
-        "font.size": 10,
-        "axes.labelsize": 10,
-        "axes.titlesize": 10,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 10,
-        "figure.titlesize": 10,
+        "font.size": font_size,
+        "axes.labelsize": font_size,
+        "axes.titlesize": font_size,
+        "axes.titleweight": "bold",
+        "xtick.labelsize": font_size,
+        "ytick.labelsize": font_size,
+        "legend.fontsize": font_size,
+        "figure.titlesize": font_size + 1,
         # --- Embedding/fonts in vector backends ---
         "pdf.fonttype": 42,  # TrueType in PDF (note: ignored by usetex in many cases)
         "ps.fonttype": 42,
