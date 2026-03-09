@@ -6,8 +6,7 @@ import datetime as dt
 import uuid
 from pathlib import Path
 
-ARTIFACT_ROOT = Path("benchkit/artifacts")
-ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
+from .config import ensure_dir
 
 
 def artifact(data: bytes, file_ext: str) -> str:
@@ -22,20 +21,20 @@ def artifact(data: bytes, file_ext: str) -> str:
     """
     today = dt.datetime.now(dt.timezone.utc).date().isoformat()
     uid = str(uuid.uuid4())[:8]
+    suffix = file_ext.removeprefix(".")
 
-    folder = ARTIFACT_ROOT / today
-    folder.mkdir(parents=True, exist_ok=True)
+    folder = ensure_dir("artifacts", today)
 
-    path = folder / f"{uid}.{file_ext}"
+    path = folder / f"{uid}.{suffix}"
     path.write_bytes(data)
     return str(path)
 
 
-def load_artifact(path: str) -> bytes:
+def load_artifact(path: str | Path) -> bytes:
     """Load raw bytes from an artifact filepath.
 
     Args:
-        path (str): Path to the artifact file.
+        path (str | Path): Path to the artifact file.
 
     Returns:
         bytes: The loaded bytes.

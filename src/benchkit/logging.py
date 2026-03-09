@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Any, ParamSpec, TextIO, TypeVar
 
 import git
 import pandas as pd
-import rich
+
+from .config import resolve_output_path
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -35,11 +36,8 @@ def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]
 
     # Normalize to a Path if not already a file handle
     if isinstance(file, (str, Path)):
-        log_path = Path(file)
+        log_path = resolve_output_path(file, "logs")
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        rich.print(
-            f"[bold green]Logging to[/bold green] [cyan]{log_path.resolve()}[/cyan]"
-        )
         file_handle: TextIO | None = None
     else:
         log_path = None
@@ -69,9 +67,10 @@ def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]
                 ),
                 "host": platform.node(),
                 "git_commit": _get_git_commit(),
+                "git_dirty": _is_dirty(),
             }
 
-            line = json.dumps(entry) + "\n"
+            line = json.dumps(entry, default=str) + "\n"
 
             if file_handle is not None:
                 file_handle.write(line)
@@ -101,7 +100,7 @@ def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
     Raises:
         FileNotFoundError: If the log file does not exist.
     """
-    log_path = Path(log_path)
+    log_path = resolve_output_path(log_path, "logs")
 
     if not log_path.exists():
         msg = f"Log file {log_path} does not exist."

@@ -29,14 +29,14 @@ def hatches() -> list[str]:
 
 
 def base_rc_params() -> dict[str, Any]:
-    """Return matplotlib rc parameters for LaTeX-style plots."""
+    """Return matplotlib rc parameters for portable publication-style plots."""
     font_size = 7
     return {
         "axes.prop_cycle": cycler("color", colors()),
-        # --- LaTeX text ---
-        "text.usetex": True,
+        # Portable defaults; callers can opt into LaTeX through custom_rc.
+        "text.usetex": False,
         "font.family": "serif",
-        "font.serif": ["Computer Modern"],
+        "font.serif": ["DejaVu Serif", "Times New Roman", "Times"],
         "font.size": font_size,
         "axes.labelsize": font_size,
         "axes.titlesize": font_size,

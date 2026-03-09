@@ -12,7 +12,7 @@ import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast, overload
 
-from benchkit.config import data_path
+from .config import ensure_dir
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -57,8 +57,7 @@ def cache(
 
     def decorator(inner_func: Callable[P, R]) -> Callable[P, R]:
         cache_name = name or inner_func.__name__
-        cache_dir: Path = data_path / "cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir: Path = ensure_dir("cache")
         dbfile: Path = cache_dir / f"{cache_name}.db"
 
         conn = sqlite3.connect(dbfile)

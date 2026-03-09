@@ -40,7 +40,7 @@ def _worker_loop(conn: Connection) -> None:
                 fn = cloudpickle.loads(fn_bytes)
                 result = fn(*args, **kwargs)
                 conn.send((True, result))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 conn.send((False, exc))
 
     except EOFError:

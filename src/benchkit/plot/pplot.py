@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import rich
 from matplotlib.figure import Figure
 
+from ..config import benchkit_home
 from .config import base_rc_params
 
 if TYPE_CHECKING:
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 R = TypeVar("R", bound=Figure | Iterable[Figure])
 P = ParamSpec("P")
+DEFAULT_PLOT_DIR = benchkit_home() / "plots"
 
 
 @overload
@@ -32,7 +34,7 @@ def pplot(
 def pplot(
     _fn: None = None,
     *,
-    dir_path: Path | str = "plots",
+    dir_path: Path | str = DEFAULT_PLOT_DIR,
     plot_name: str | None = None,
     custom_rc: dict[str, Any] | None = None,
     extensions: list[str] | None = None,
@@ -42,7 +44,7 @@ def pplot(
 def pplot(
     _fn: Callable[P, R] | None = None,
     *,
-    dir_path: Path | str = "plots",
+    dir_path: Path | str = DEFAULT_PLOT_DIR,
     plot_name: str | None = None,
     custom_rc: dict[str, Any] | None = None,
     extensions: list[str] | None = None,

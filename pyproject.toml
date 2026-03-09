@@ -7,21 +7,21 @@ build-backend = "hatchling.build"
 
 [project]
 name = "benchkit"
-description = "Utility kit for benchmarking stuff."
+description = "Small Python library for running benchmarks, logging results, and plotting comparisons."
 readme = "README.md"
 authors = [
     { name = "Nathaniel Tornow", email = "nathaniel.tornow@tum.de" },
 ]
-keywords = ["benchmarking", "performance", "testing"]
+license = { file = "LICENSE" }
+keywords = ["benchmarking", "logging", "performance", "plotting"]
 
 classifiers = [
     "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: Apache Software License",
     "Natural Language :: English",
-    "Operating System :: MacOS",
-    "Operating System :: Microsoft :: Windows",
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
@@ -43,10 +43,6 @@ dependencies = [
     "typer>=0.16.0",
 ]
 dynamic = ["version"]
-
-
-[project.scripts]
-benchkit = "benchkit.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/benchkit"]

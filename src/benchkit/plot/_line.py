@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from .config import default_error_kw, get_style
+from .config import get_style
 
 if TYPE_CHECKING:
     import pandas as pd
