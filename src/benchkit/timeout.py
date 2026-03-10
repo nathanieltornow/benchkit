@@ -79,6 +79,9 @@ class Worker:
 
         self.conn = parent_conn
         self.proc = ctx.Process(target=_worker_loop, args=(child_conn,))
+        # Daemonic workers do not block parent process shutdown in nested
+        # multiprocessing scenarios such as parallel benchmark sweeps.
+        self.proc.daemon = True
         self.proc.start()
 
     def restart(self) -> None:

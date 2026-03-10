@@ -1,12 +1,12 @@
-"""Utility functions for pretty plots."""
+"""Utilities for applying plot defaults and saving figures."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
-from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
+from typing import Any
 
 import matplotlib.pyplot as plt
 import rich
@@ -15,99 +15,64 @@ from matplotlib.figure import Figure
 from ..config import benchkit_home
 from .config import base_rc_params
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-
-R = TypeVar("R", bound=Figure | Iterable[Figure])
-P = ParamSpec("P")
 DEFAULT_PLOT_DIR = benchkit_home() / "plots"
+DEFAULT_EXTENSIONS = ["pdf"]
 
 
-@overload
-def pplot(
-    _fn: Callable[P, R],
-) -> Callable[P, R]: ...
-
-
-@overload
-def pplot(
-    _fn: None = None,
-    *,
-    dir_path: Path | str = DEFAULT_PLOT_DIR,
-    plot_name: str | None = None,
-    custom_rc: dict[str, Any] | None = None,
-    extensions: list[str] | None = None,
-) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
-
-
-def pplot(
-    _fn: Callable[P, R] | None = None,
-    *,
-    dir_path: Path | str = DEFAULT_PLOT_DIR,
-    plot_name: str | None = None,
-    custom_rc: dict[str, Any] | None = None,
-    extensions: list[str] | None = None,
-) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
-    """Decorator to save pretty plots.
+@contextmanager
+def pplot(*, custom_rc: dict[str, Any] | None = None) -> Iterator[None]:
+    """Apply BenchKit plot defaults within a context block.
 
     Args:
-        dir_path (Path | str): Directory to save plots. Defaults to "plots".
-        plot_name (str | None): Name of the plot file. If None, uses the function name.
-        custom_rc (dict[str, Any] | None): Custom matplotlib rc parameters.
-        extensions (list[str] | None): List of file extensions to save the plots.
+        custom_rc: Optional matplotlib rc overrides.
+    """
+    rc_params = base_rc_params()
+    rc_params.update(custom_rc or {})
+    with plt.rc_context(rc=rc_params):
+        yield
+
+
+def save_figure(
+    figs: Figure | Iterable[Figure],
+    *,
+    plot_name: str,
+    dir_path: Path | str = DEFAULT_PLOT_DIR,
+    extensions: list[str] | None = None,
+) -> list[Path]:
+    """Save one or more figures in a timestamped directory structure.
+
+    Args:
+        figs: Figure or iterable of figures to save.
+        plot_name: Base name for the output directory and files.
+        dir_path: Root output directory.
+        extensions: File extensions to write. Defaults to PDF only.
 
     Returns:
-        Callable: Decorator function that wraps the plotting function.
+        list[Path]: Paths to the saved files.
     """
     if extensions is None:
-        extensions = ["pdf"]
+        extensions = DEFAULT_EXTENSIONS
 
-    custom_rc = custom_rc or {}
-    rc_params = base_rc_params()
-    rc_params.update(custom_rc)
-
-    def decorator(fn: Callable[P, R]) -> Callable[P, R]:
-        @wraps(fn)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            with plt.rc_context(rc=rc_params):
-                result = fn(*args, **kwargs)
-                for extension in extensions:
-                    _save_figures(
-                        result,
-                        dir_path=dir_path,
-                        fname=plot_name or fn.__name__,
-                        extension=extension,
-                    )
-                return result
-
-        return wrapper
-
-    if callable(_fn):
-        return decorator(_fn)
-    return decorator
-
-
-def _save_figures(
-    figs: Figure | Iterable[Figure],
-    dir_path: Path | str,
-    fname: str,
-    extension: str = "pdf",
-) -> None:
-    """Save figure(s) to PDF in a dated directory structure."""
     date_str = datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M")
-    out_dir = Path(dir_path) / fname / date_str
+    out_dir = Path(dir_path) / plot_name / date_str
     out_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[Path] = []
 
     def _save_one(fig: object, filename: str) -> None:
         if not isinstance(fig, Figure):
             return
+        output_path = out_dir / filename
         fig.tight_layout()
-        fig.savefig(out_dir / filename, dpi=400, bbox_inches="tight")
-        rich.print(f":floppy_disk: Saved plot to [bold]{out_dir / filename}[/bold]")
+        fig.savefig(output_path, dpi=400, bbox_inches="tight")
+        saved_paths.append(output_path)
+        rich.print(f":floppy_disk: Saved plot to [bold]{output_path}[/bold]")
 
     if isinstance(figs, Figure):
-        _save_one(figs, f"{fname}.{extension}")
+        for extension in extensions:
+            _save_one(figs, f"{plot_name}.{extension}")
     elif isinstance(figs, Iterable):
         for i, maybe_fig in enumerate(figs):
-            _save_one(maybe_fig, f"{fname}_{i}.{extension}")
+            for extension in extensions:
+                _save_one(maybe_fig, f"{plot_name}_{i}.{extension}")
+
+    return saved_paths

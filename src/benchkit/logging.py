@@ -1,4 +1,4 @@
-"""Decorator for logging function calls and results to a JSONL file."""
+"""JSONL-backed storage for benchmark runs."""
 
 from __future__ import annotations
 
@@ -33,15 +33,7 @@ def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]
         Decorator for logging function calls and results.
     """
     init_time = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Normalize to a Path if not already a file handle
-    if isinstance(file, (str, Path)):
-        log_path = resolve_output_path(file, "logs")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handle: TextIO | None = None
-    else:
-        log_path = None
-        file_handle = file
+    log_path, file_handle = _normalize_log_target(file)
 
     def deco(fn: Callable[P, R]) -> Callable[P, R]:
         sig = inspect.signature(fn)
@@ -55,31 +47,13 @@ def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]
             config.pop("cls", None)
 
             result: R = fn(*args, **kwargs)
-
-            entry: dict[str, Any] = {
-                "config": config,
-                "result": result,
-                "id": str(uuid.uuid4())[:8],
-                "func_name": fn.__name__,
-                "init_time": init_time,
-                "timestamp": dt.datetime.now(dt.timezone.utc).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
-                "host": platform.node(),
-                "git_commit": _get_git_commit(),
-                "git_dirty": _is_dirty(),
-            }
-
-            line = json.dumps(entry, default=str) + "\n"
-
-            if file_handle is not None:
-                file_handle.write(line)
-                file_handle.flush()
-            else:
-                assert log_path is not None
-                with log_path.open("a", encoding="utf-8") as f:
-                    f.write(line)
-
+            write_log_entry(
+                file_handle if file_handle is not None else log_path,
+                config=config,
+                result=result,
+                func_name=fn.__name__,
+                init_time=init_time,
+            )
             return result
 
         return wrapper
@@ -91,8 +65,8 @@ def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
     """Load log entries from a JSONL log file.
 
     Args:
-        log_path (str | Path): Path to the log file.
-        normalize (bool, optional): Whether to flatten nested dicts into columns.
+        log_path: Path to the log file.
+        normalize: Whether to flatten nested dicts into columns.
 
     Returns:
         pd.DataFrame: DataFrame of log entries.
@@ -101,16 +75,13 @@ def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
         FileNotFoundError: If the log file does not exist.
     """
     log_path = resolve_output_path(log_path, "logs")
-
     if not log_path.exists():
         msg = f"Log file {log_path} does not exist."
         raise FileNotFoundError(msg)
 
     log_df = pd.read_json(log_path, lines=True)
-
     if normalize:
         log_df = pd.json_normalize(log_df.to_dict(orient="records"))
-
     return log_df
 
 
@@ -121,42 +92,98 @@ def join_logs(
 ) -> pd.DataFrame:
     """Join multiple log files on their overlapping config columns.
 
-    Args:
-        log_paths (list[str | Path]): List of log file paths.
-        how (str, optional): Merge method. Defaults to "outer".
-
     Returns:
         pd.DataFrame: Merged DataFrame of log entries.
 
     Raises:
         ValueError: If there are no overlapping config columns between logs.
     """
-    # Load all logs as normalized DataFrames
     dfs = [load_log(p, normalize=True) for p in log_paths]
-
     if not dfs:
         return pd.DataFrame()
 
-    # Start with the first df
     merged = dfs[0]
-
-    # Iteratively merge with all subsequent dfs
     for df in dfs[1:]:
-
-        # Find shared config.* columns
         config_cols = sorted(set(merged.columns).intersection(df.columns))
         config_cols = [c for c in config_cols if c.startswith("config.")]
-
         if not config_cols:
             msg = (
-                f"No overlapping config columns between logs:\n"
+                "No overlapping config columns between logs:\n"
                 f"{merged.columns}\n---\n{df.columns}"
             )
             raise ValueError(msg)
-
-        # Merge on overlapping config cols only
         merged = merged.merge(df, on=config_cols, how=how)
     return merged
+
+
+def build_log_entry(
+    *,
+    config: dict[str, Any],
+    result: Any,  # noqa: ANN401
+    func_name: str,
+    init_time: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a JSON-serializable benchmark log entry.
+
+    Returns:
+        dict[str, Any]: The log row that will be written to JSONL.
+    """
+    entry: dict[str, Any] = {
+        "config": config,
+        "result": result,
+        "id": str(uuid.uuid4())[:8],
+        "func_name": func_name,
+        "init_time": init_time,
+        "timestamp": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "host": platform.node(),
+        "git_commit": _get_git_commit(),
+        "git_dirty": _is_dirty(),
+    }
+    if extra is not None:
+        entry.update(extra)
+    return entry
+
+
+def write_log_entry(
+    file: TextIO | Path | str,
+    *,
+    config: dict[str, Any],
+    result: Any,  # noqa: ANN401
+    func_name: str,
+    init_time: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Append a benchmark log entry to a JSONL target."""
+    log_path, file_handle = _normalize_log_target(file)
+    line = json.dumps(
+        build_log_entry(
+            config=config,
+            result=result,
+            func_name=func_name,
+            init_time=init_time,
+            extra=extra,
+        ),
+        default=str,
+        sort_keys=True,
+    ) + "\n"
+
+    if file_handle is not None:
+        file_handle.write(line)
+        file_handle.flush()
+        return
+
+    assert log_path is not None
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def _normalize_log_target(file: TextIO | Path | str) -> tuple[Path | None, TextIO | None]:
+    if isinstance(file, (str, Path)):
+        log_path = resolve_output_path(file, "logs")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        return log_path, None
+    return None, file
 
 
 def _get_git_commit() -> str:
