@@ -172,12 +172,12 @@ def _summary_panel(log_path: Path) -> Table:
     Returns:
         Table: Renderable summary table.
     """
-    df = load_log(log_path, normalize=False)
-    row_count = len(df)
-    statuses = df["status"].value_counts(dropna=False).to_dict() if "status" in df else {}
+    log_df = load_log(log_path, normalize=False)
+    row_count = len(log_df)
+    statuses = log_df["status"].value_counts(dropna=False).to_dict() if "status" in log_df else {}
     config_keys: set[str] = set()
     result_keys: set[str] = set()
-    for entry in df.to_dict(orient="records"):
+    for entry in log_df.to_dict(orient="records"):
         config = entry.get("config")
         result = entry.get("result")
         if isinstance(config, dict):
@@ -235,7 +235,7 @@ def _watch_render(log_path: Path, limit: int) -> Table:
     return table
 
 
-@app.command("logs")
+@app.command("logs")  # type: ignore[misc]
 def logs_list() -> None:
     """List known BenchKit JSONL logs.
 
@@ -250,14 +250,14 @@ def logs_list() -> None:
     console.print(_logs_table(logs))
 
 
-@app.command()
+@app.command()  # type: ignore[misc]
 def summary(target: str) -> None:
     """Print a compact summary for one sweep log."""
     log_path = _resolve_log_target(target)
     console.print(_summary_panel(log_path))
 
 
-@app.command()
+@app.command()  # type: ignore[misc]
 def watch(
     target: str,
     limit: int = typer.Option(12, min=1, help="Number of recent rows to show."),
@@ -274,7 +274,7 @@ def watch(
             return
 
 
-@artifacts_app.command("list")
+@artifacts_app.command("list")  # type: ignore[misc]
 def artifacts_list(
     sweep_id: str,
     config: Annotated[
@@ -301,7 +301,7 @@ def artifacts_list(
     console.print(_artifact_table(records))
 
 
-@artifacts_app.command("get")
+@artifacts_app.command("get")  # type: ignore[misc]
 def artifacts_get(
     sweep_id: str,
     name: Annotated[str, typer.Option(help="Artifact file name.")],
@@ -321,7 +321,7 @@ def artifacts_get(
     console.print(record.path)
 
 
-@artifacts_app.command("clear")
+@artifacts_app.command("clear")  # type: ignore[misc]
 def artifacts_clear(
     sweep_id: str,
     yes: Annotated[

@@ -6,7 +6,7 @@ import datetime as dt
 import json
 import platform
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import git
 import pandas as pd
@@ -44,7 +44,7 @@ def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
 def join_logs(
     log_paths: list[str | Path],
     *,
-    how: str = "outer",
+    how: Literal["left", "right", "outer", "inner", "cross", "left_anti", "right_anti"] = "outer",
 ) -> pd.DataFrame:
     """Join multiple log files on their overlapping config columns.
 
@@ -63,10 +63,7 @@ def join_logs(
         config_cols = sorted(set(merged.columns).intersection(df.columns))
         config_cols = [c for c in config_cols if c.startswith("config.")]
         if not config_cols:
-            msg = (
-                "No overlapping config columns between logs:\n"
-                f"{merged.columns}\n---\n{df.columns}"
-            )
+            msg = f"No overlapping config columns between logs:\n{merged.columns}\n---\n{df.columns}"
             raise ValueError(msg)
         merged = merged.merge(df, on=config_cols, how=how)
     return merged
@@ -112,17 +109,20 @@ def write_log_entry(
 ) -> None:
     """Append a benchmark log entry to a JSONL target."""
     log_path = _normalize_log_target(file)
-    line = json.dumps(
-        build_log_entry(
-            config=config,
-            result=result,
-            func_name=func_name,
-            init_time=init_time,
-            extra=extra,
-        ),
-        default=str,
-        sort_keys=True,
-    ) + "\n"
+    line = (
+        json.dumps(
+            build_log_entry(
+                config=config,
+                result=result,
+                func_name=func_name,
+                init_time=init_time,
+                extra=extra,
+            ),
+            default=str,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
     with log_path.open("a", encoding="utf-8") as f:
         f.write(line)

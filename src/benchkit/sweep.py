@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from itertools import product
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-import cloudpickle
+import cloudpickle  # type: ignore[import-not-found]
 from rich.box import ROUNDED
 from rich.console import Console
 from rich.panel import Panel
@@ -36,6 +36,8 @@ from .state import SweepState, case_key, state_path_for
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
+    from multiprocessing.context import SpawnContext, SpawnProcess
+    from multiprocessing.queues import Queue
     from pathlib import Path
 
 R = TypeVar("R")
@@ -69,8 +71,8 @@ class _ActiveCase:
 @dataclass(slots=True)
 class _WorkerState:
     worker_id: int
-    proc: mp.Process
-    job_queue: mp.Queue
+    proc: SpawnProcess
+    job_queue: Queue[Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +101,8 @@ def _pool_worker_entry(
     fn_bytes: bytes,
     sweep_id: str,
     worker_id: int,
-    job_queue: mp.Queue,
-    result_queue: mp.Queue,
+    job_queue: Queue[Any],
+    result_queue: Queue[Any],
 ) -> None:
     fn: Callable[..., Any] = cloudpickle.loads(fn_bytes)
     while True:
@@ -115,13 +117,9 @@ def _pool_worker_entry(
             sweep_id=sweep_id,
         )
         if exc is not None:
-            result_queue.put(
-                ("result", worker_id, job.index, job.attempt, False, exc, artifacts)
-            )
+            result_queue.put(("result", worker_id, job.index, job.attempt, False, exc, artifacts))
             continue
-        result_queue.put(
-            ("result", worker_id, job.index, job.attempt, True, result, artifacts)
-        )
+        result_queue.put(("result", worker_id, job.index, job.attempt, True, result, artifacts))
 
 
 def _run_case_with_retries(
@@ -177,7 +175,7 @@ class Sweep:
     seed: int | None = None
     retries: int = 1
     timeout_seconds: float | None = None
-    continue_on_failure: bool = False
+    continue_on_failure: bool = True
     default_result: Any = None
     max_workers: int = 1
     show_progress: bool = True
@@ -222,12 +220,10 @@ class Sweep:
         fn_name = self.fn.__name__
         all_cases = list(self._cases(self.fn, benchmark_name))
         state = SweepState(cast("Path", self.state_path))
-        log_path = str(resolve_output_path(self.log_path, "logs"))
+        log_path = str(resolve_output_path(cast("str | Path", self.log_path), "logs"))
         existing_log_rows = self._count_existing_rows(log_path)
         completed_keys = (
-            state.completed_keys(benchmark_name=benchmark_name, log_path=log_path)
-            if self.resume
-            else set()
+            state.completed_keys(benchmark_name=benchmark_name, log_path=log_path) if self.resume else set()
         )
         cases = [case for case in all_cases if case.case_key not in completed_keys]
         skipped_count = len(all_cases) - len(cases)
@@ -317,10 +313,10 @@ class Sweep:
         init_time: str,
         state: SweepState,
         log_path: str,
-        ) -> tuple[list[R], list[dict[str, Any]], list[Any]]:
+    ) -> tuple[list[R], list[dict[str, Any]], list[Any]]:
         fn_bytes = cloudpickle.dumps(fn)
-        ctx = mp.get_context("spawn")
-        result_queue: mp.Queue = ctx.Queue()
+        ctx: SpawnContext = mp.get_context("spawn")
+        result_queue: Queue[Any] = ctx.Queue()
         results_by_index: dict[int, R] = {}
         outcomes_by_index: dict[int, dict[str, Any]] = {}
         counts = self._initial_counts()
@@ -345,9 +341,7 @@ class Sweep:
                     worker_id = idle_workers.pop(0)
                     attempt = attempts_by_index.get(index, 0) + 1
                     attempts_by_index[index] = attempt
-                    worker_map[worker_id].job_queue.put(
-                        _Job(case=case, index=index, attempt=attempt)
-                    )
+                    worker_map[worker_id].job_queue.put(_Job(case=case, index=index, attempt=attempt))
 
                 try:
                     message = result_queue.get(timeout=0.05)
@@ -436,7 +430,7 @@ class Sweep:
         updated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         attempt = int(case_result.outcome.get("attempt", 1))
         write_log_entry(
-            self.log_path,
+            cast("str | Path", self.log_path),
             config=case.log_config,
             result=case_result.result,
             func_name=func_name,
@@ -472,14 +466,14 @@ class Sweep:
 
     def _start_worker_pool(
         self,
-        ctx: mp.context.BaseContext,
+        ctx: SpawnContext,
         fn_bytes: bytes,
         sweep_id: str,
-        result_queue: mp.Queue,
+        result_queue: Queue[Any],
     ) -> list[_WorkerState]:
         workers: list[_WorkerState] = []
         for worker_id in range(self.max_workers):
-            job_queue: mp.Queue = ctx.Queue()
+            job_queue: Queue[Any] = ctx.Queue()
             proc = ctx.Process(
                 target=_pool_worker_entry,
                 args=(fn_bytes, sweep_id, worker_id, job_queue, result_queue),
@@ -542,10 +536,10 @@ class Sweep:
         log_path: str,
         progress: Progress | None,
         task_id: int | None,
-        ctx: mp.context.BaseContext,
+        ctx: SpawnContext,
         fn_bytes: bytes,
         worker_sweep_id: str,
-        result_queue: mp.Queue,
+        result_queue: Queue[Any],
         worker_map: dict[int, _WorkerState],
         idle_workers: list[int],
         attempts_by_index: dict[int, int],
@@ -565,7 +559,7 @@ class Sweep:
             worker.proc.terminate()
             worker.proc.join()
             active.pop(worker_id, None)
-            replacement_queue: mp.Queue = ctx.Queue()
+            replacement_queue: Queue[Any] = ctx.Queue()
             replacement = ctx.Process(
                 target=_pool_worker_entry,
                 args=(
@@ -631,7 +625,7 @@ class Sweep:
     ) -> None:
         if not self.show_progress:
             return
-        log_path = resolve_output_path(self.log_path, "logs")
+        log_path = resolve_output_path(cast("str | Path", self.log_path), "logs")
         state_path = self.state_path
         mode = "parallel" if self.max_workers > 1 else "sequential"
         table = Table.grid(expand=True)
@@ -708,10 +702,13 @@ class Sweep:
     ) -> int | None:
         if progress is None:
             return None
-        return progress.add_task(
-            f"Running {benchmark_name}",
-            total=total_cases,
-            counts=Sweep._counts_text(counts),
+        return cast(
+            "int",
+            progress.add_task(
+                f"Running {benchmark_name}",
+                total=total_cases,
+                counts=Sweep._counts_text(counts),
+            ),
         )
 
     @staticmethod
@@ -739,14 +736,12 @@ class Sweep:
 
     @staticmethod
     def _counts_text(counts: dict[str, int]) -> str:
-        return "  ".join(
-            [
-                f"[green]ok {counts.get('ok', 0)}[/green]",
-                f"[red]fail {counts.get('failure', 0)}[/red]",
-                f"[yellow]timeout {counts.get('timeout', 0)}[/yellow]",
-                f"[cyan]skip {counts.get('skipped', 0)}[/cyan]",
-            ]
-        )
+        return "  ".join([
+            f"[green]ok {counts.get('ok', 0)}[/green]",
+            f"[red]fail {counts.get('failure', 0)}[/red]",
+            f"[yellow]timeout {counts.get('timeout', 0)}[/yellow]",
+            f"[cyan]skip {counts.get('skipped', 0)}[/cyan]",
+        ])
 
     @staticmethod
     def _format_config(config: dict[str, Any], max_len: int = 48) -> str:
@@ -786,10 +781,7 @@ class Sweep:
         param_names = tuple(self.params.keys())
         param_values = [list(values) for values in self.params.values()]
         if param_values:
-            combinations = [
-                dict(zip(param_names, values, strict=True))
-                for values in product(*param_values)
-            ]
+            combinations = [dict(zip(param_names, values, strict=True)) for values in product(*param_values)]
         else:
             combinations = [{}]
 

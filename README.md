@@ -49,6 +49,7 @@ def benchmark(size: int, backend: str) -> dict[str, float]:
     bk.context().save_pickle("summary.pkl", {"runtime_ms": runtime_ms})
     return {"runtime_ms": runtime_ms, "throughput": throughput}
 
+
 sweep = bk.Sweep(
     id="matrix",
     fn=benchmark,
@@ -151,4 +152,4 @@ benchkit artifacts clear simple --yes
 - Relative log paths resolve to JSONL files under `~/.benchkit/logs/`.
 - `pplot` applies portable matplotlib defaults.
 - `save_figure` writes timestamped output files.
-See [examples/simple.py](/Users/nathanieltornow/code/benchkit/examples/simple.py) for a runnable example.
+  See [examples/simple.py](/Users/nathanieltornow/code/benchkit/examples/simple.py) for a runnable example.

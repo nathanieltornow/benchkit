@@ -19,6 +19,7 @@ def train_model(n: int, lr: float) -> dict[str, float]:
     bk.context().save_pickle("metrics.pkl", {"acc": acc, "loss": loss})
     return {"acc": acc, "loss": loss}
 
+
 def main() -> None:
     """Run the example benchmark sweep and plot the results."""
     sweep = bk.Sweep(

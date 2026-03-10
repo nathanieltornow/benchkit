@@ -17,7 +17,6 @@ def bar_comparison(
     *,
     error: Literal["std", "sem", "ci95"] | None = "ci95",
 ) -> None:
-
     groups = results[group_key].dropna().unique()
 
     # x-axis = groups

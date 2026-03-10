@@ -53,14 +53,7 @@ def line_comparison(
                 case "sem":
                     errors = [grouped[g][key].sem() for g in groups]
                 case "ci95":
-                    errors = [
-                        (
-                            1.96 * grouped[g][key].sem()
-                            if len(grouped[g][key]) > 1
-                            else 0
-                        )
-                        for g in groups
-                    ]
+                    errors = [(1.96 * grouped[g][key].sem() if len(grouped[g][key]) > 1 else 0) for g in groups]
 
         # Line itself
         ax.plot(

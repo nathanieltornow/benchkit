@@ -275,14 +275,12 @@ class RunContext:
         return str(target)
 
     def _record(self, path: Path, *, kind: str) -> None:
-        self.records.append(
-            {
-                "name": path.name,
-                "path": str(path),
-                "kind": kind,
-                "size_bytes": path.stat().st_size,
-            }
-        )
+        self.records.append({
+            "name": path.name,
+            "path": str(path),
+            "kind": kind,
+            "size_bytes": path.stat().st_size,
+        })
 
 
 _CURRENT_CONTEXT: ContextVar[RunContext | None] = ContextVar(
@@ -347,16 +345,10 @@ def get_artifact(
     """
     matches = list_artifacts(sweep_id, config=config, rep=rep, name=name)
     if not matches:
-        msg = (
-            f"No artifact found for sweep_id={sweep_id!r}, "
-            f"config={config!r}, rep={rep}, name={name!r}"
-        )
+        msg = f"No artifact found for sweep_id={sweep_id!r}, config={config!r}, rep={rep}, name={name!r}"
         raise FileNotFoundError(msg)
     if len(matches) > 1:
-        msg = (
-            f"Multiple artifacts found for sweep_id={sweep_id!r}, "
-            f"config={config!r}, rep={rep}, name={name!r}"
-        )
+        msg = f"Multiple artifacts found for sweep_id={sweep_id!r}, config={config!r}, rep={rep}, name={name!r}"
         raise ValueError(msg)
     return matches[0]
 
