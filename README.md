@@ -4,21 +4,16 @@
 
 ## What it provides
 
-- `@benchkit.foreach(...)` for simple benchmark grids
 - `benchkit.Sweep(...)` for explicit repeated benchmark sweeps with retries, timeout handling, and optional process parallelism
-- `@benchkit.log(...)` for structured JSONL result logging
 - `benchkit.load_log(...)` and `benchkit.join_logs(...)` for analysis with pandas
-- `@benchkit.timeout(...)`, `@benchkit.retry(...)`, and `@benchkit.catch_failures(...)` for robust benchmark runs
-- `benchkit.artifact(...)` for binary outputs such as models, traces, or raw reports
+- `benchkit.context()` plus `get_artifact(...)` / `list_artifacts(...)` for indexed per-run artifacts
 - `benchkit.pplot(...)` for plot defaults and `benchkit.save_figure(...)` for saving figures
-- `@benchkit.cache(...)` for local SQLite-backed memoization
 
-By default, outputs go under `.benchkit/`:
+By default, outputs go under `~/.benchkit/`:
 
-- `.benchkit/logs/`
-- `.benchkit/artifacts/`
-- `.benchkit/cache/`
-- `.benchkit/plots/`
+- `~/.benchkit/logs/`
+- `~/.benchkit/artifacts/`
+- `~/.benchkit/plots/`
 
 Set `BENCHKIT_HOME=/path/to/output-root` to override that location.
 
@@ -125,25 +120,35 @@ Each log row contains:
 5. Use pandas directly or pass the dataframe to plotting helpers.
 6. Build figures inside `pplot` and write them with `save_figure`.
 
+## CLI
+
+BenchKit also ships a small operational CLI:
+
+```bash
+benchkit logs
+benchkit summary simple
+benchkit watch simple
+benchkit artifacts list simple
+benchkit artifacts get simple --config n=1 --config lr=0.01 --rep 1 --name metrics.pkl
+benchkit artifacts clear simple --yes
+```
+
 ## Notes
 
 - `Sweep` runs the Cartesian product of `params` and repeats each case `repeat` times.
 - `Sweep` can retry failed cases and convert failures/timeouts into a default result when `continue_on_failure=True`.
 - `Sweep(max_workers>1)` uses process-based parallel execution while keeping log writing in the parent process.
 - For publishable runtime measurements, prefer `max_workers=1` to avoid cross-case resource contention.
-- `Sweep(id="matrix", ...)` defaults to `.benchkit/logs/matrix.jsonl` and `.benchkit/state/matrix.sqlite`.
+- `Sweep(id="matrix", ...)` defaults to `~/.benchkit/logs/matrix.jsonl` and `~/.benchkit/state/matrix.sqlite`.
 - `Sweep(resume=True)` skips previously successful `(benchmark, config, rep)` cases for that sweep id and log path.
-- If the sweep function calls `bk.context()`, artifacts are stored under `.benchkit/artifacts/<id>/<case-key>/rep-<n>/`.
-- BenchKit also indexes artifacts in `.benchkit/state/artifacts.sqlite`.
+- If the sweep function calls `bk.context()`, artifacts are stored under `~/.benchkit/artifacts/<id>/<case-key>/rep-<n>/`.
+- BenchKit also indexes artifacts in `~/.benchkit/state/artifacts.sqlite`.
 - Use `get_artifact("matrix", config={...}, rep=1, name="summary.pkl")` to fetch one artifact directly.
 - Use `list_artifacts("matrix", config={...})` to inspect all indexed artifacts for one input.
 - Use `load_pickle(...)` for artifacts stored with `save_pickle(...)`.
 - Use `clear_sweep_artifacts("matrix")` to remove all stored artifacts for a sweep id.
 - If you use `timeout_seconds` in a script entrypoint, guard execution with `if __name__ == "__main__":`.
-- `foreach` still works for small decorator-based experiments.
-- Relative log paths resolve to JSONL files under `.benchkit/logs/`.
+- Relative log paths resolve to JSONL files under `~/.benchkit/logs/`.
 - `pplot` applies portable matplotlib defaults.
 - `save_figure` writes timestamped output files.
-- `cache` is useful for deterministic preprocessing steps around expensive benchmarks.
-
 See [examples/simple.py](/Users/nathanieltornow/code/benchkit/examples/simple.py) for a runnable example.

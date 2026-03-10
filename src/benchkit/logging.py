@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
-import functools
-import inspect
 import json
 import platform
 import uuid
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, TextIO, TypeVar
+from typing import TYPE_CHECKING, Any
 
 import git
 import pandas as pd
@@ -17,48 +14,7 @@ import pandas as pd
 from .config import resolve_output_path
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
-P = ParamSpec("P")
-R = TypeVar("R")
-
-
-def log(file: TextIO | Path | str) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Decorator to log function calls and their results.
-
-    Args:
-        file: Path or open file handle where log entries should be written.
-
-    Returns:
-        Decorator for logging function calls and results.
-    """
-    init_time = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    log_path, file_handle = _normalize_log_target(file)
-
-    def deco(fn: Callable[P, R]) -> Callable[P, R]:
-        sig = inspect.signature(fn)
-
-        @functools.wraps(fn)
-        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            bound = sig.bind(*args, **kwargs)
-            bound.apply_defaults()
-            config = dict(bound.arguments)
-            config.pop("self", None)
-            config.pop("cls", None)
-
-            result: R = fn(*args, **kwargs)
-            write_log_entry(
-                file_handle if file_handle is not None else log_path,
-                config=config,
-                result=result,
-                func_name=fn.__name__,
-                init_time=init_time,
-            )
-            return result
-
-        return wrapper
-
-    return deco
+    from pathlib import Path
 
 
 def load_log(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
@@ -146,7 +102,7 @@ def build_log_entry(
 
 
 def write_log_entry(
-    file: TextIO | Path | str,
+    file: Path | str,
     *,
     config: dict[str, Any],
     result: Any,  # noqa: ANN401
@@ -155,7 +111,7 @@ def write_log_entry(
     extra: dict[str, Any] | None = None,
 ) -> None:
     """Append a benchmark log entry to a JSONL target."""
-    log_path, file_handle = _normalize_log_target(file)
+    log_path = _normalize_log_target(file)
     line = json.dumps(
         build_log_entry(
             config=config,
@@ -168,22 +124,14 @@ def write_log_entry(
         sort_keys=True,
     ) + "\n"
 
-    if file_handle is not None:
-        file_handle.write(line)
-        file_handle.flush()
-        return
-
-    assert log_path is not None
     with log_path.open("a", encoding="utf-8") as f:
         f.write(line)
 
 
-def _normalize_log_target(file: TextIO | Path | str) -> tuple[Path | None, TextIO | None]:
-    if isinstance(file, (str, Path)):
-        log_path = resolve_output_path(file, "logs")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        return log_path, None
-    return None, file
+def _normalize_log_target(file: Path | str) -> Path:
+    log_path = resolve_output_path(file, "logs")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    return log_path
 
 
 def _get_git_commit() -> str:

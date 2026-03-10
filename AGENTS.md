@@ -7,21 +7,20 @@ Use `benchkit` as a local library for benchmark orchestration, JSONL run logging
 1. Import `benchkit as bk`.
 2. Put the benchmark body in a pure function that returns a JSON-serializable dict.
 3. Prefer `bk.Sweep(id=..., fn=..., params=..., repeat=5)` for repeated parameter sweeps.
-4. Wrap the benchmark function with reliability decorators when needed:
-   `@bk.retry(...)`, `@bk.timeout(...)`, `@bk.catch_failures(...)`
+4. Use `Sweep` options like `retries=...`, `timeout_seconds=...`, and `continue_on_failure=True` for run reliability.
 5. Execute the sweep once to generate the full benchmark log.
 6. Read results with `bk.load_log(...)`.
 7. If the sweep stores artifacts, fetch them with `bk.get_artifact(...)` or inspect them with `bk.list_artifacts(...)`.
 8. Create figures inside `with bk.pplot(...):` and save them with `bk.save_figure(...)`.
+9. Use the `benchkit` CLI for operational tasks like watching logs and resolving artifacts.
 
 ## Conventions
 
-- Relative log paths are written to JSONL files under `.benchkit/logs/`.
-- Artifacts are written to `.benchkit/artifacts/`.
-- If a sweep function calls `bk.context()`, per-case artifacts go under `.benchkit/artifacts/<id>/<case-key>/rep-<n>/`.
-- Cached values are written to `.benchkit/cache/`.
-- Plots are written to `.benchkit/plots/`.
-- Sweep resume state is cached per sweep id under `.benchkit/state/<id>.sqlite` by default.
+- Relative log paths are written to JSONL files under `~/.benchkit/logs/`.
+- Artifacts are written to `~/.benchkit/artifacts/`.
+- If a sweep function calls `bk.context()`, per-case artifacts go under `~/.benchkit/artifacts/<id>/<case-key>/rep-<n>/`.
+- Plots are written to `~/.benchkit/plots/`.
+- Sweep resume state is cached per sweep id under `~/.benchkit/state/<id>.sqlite` by default.
 - Sweep logs include `benchmark`, `sweep_id`, `rep`, `rep_count`, `status`, `attempt`, `execution_mode`, and `max_workers`.
 - Set `BENCHKIT_HOME` to move all of those directories.
 
@@ -29,7 +28,6 @@ Use `benchkit` as a local library for benchmark orchestration, JSONL run logging
 
 - Prefer flat metric dicts such as `{"runtime_ms": 12.3, "accuracy": 0.94}`.
 - Avoid returning custom classes unless they stringify cleanly in logs.
-- Use `bk.artifact(...)` for large binary outputs and log the returned path instead of embedding bytes in results.
 - For sweep-local files, prefer `bk.context().save_json(...)`, `bk.context().save_text(...)`, `bk.context().save_bytes(...)`, or `bk.context().copy_file(...)`.
 - For Python objects, prefer `bk.context().save_pickle(...)` and load them back with `bk.load_pickle(...)`.
 
@@ -42,12 +40,5 @@ Use `benchkit` as a local library for benchmark orchestration, JSONL run logging
 
 ## Failure handling
 
-- `bk.retry(n)` retries exceptions.
-- `bk.timeout(seconds, default=...)` runs the function in a worker subprocess and returns the provided default on timeout.
-- `bk.catch_failures(default=...)` converts exceptions into a fallback result so the sweep can continue.
-- `bk.Sweep(...)` also supports `retries=...`, `timeout_seconds=...`, `continue_on_failure=True`, `default_result=...`, `max_workers=...`, and `resume=True`.
+- `bk.Sweep(...)` supports `retries=...`, `timeout_seconds=...`, `continue_on_failure=True`, `default_result=...`, `max_workers=...`, and `resume=True`.
 - Use `max_workers=1` for timing-sensitive benchmarks unless the user explicitly accepts contention.
-
-## Common mistake to avoid
-
-- `foreach` zips values inside one decorator call. For a Cartesian product, stack multiple `foreach` decorators instead of passing multiple keyword lists to one decorator.

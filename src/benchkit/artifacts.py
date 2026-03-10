@@ -7,50 +7,26 @@ import json
 import pickle  # noqa: S403
 import shutil
 import sqlite3
-import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from .config import benchkit_home, ensure_dir
-from .logging import load_log
 
 
-def artifact(data: bytes, file_ext: str) -> str:
-    """Store raw bytes as an artifact and return its filepath.
-
-    Args:
-        data (bytes): Bytes to store.
-        file_ext (str): File extension.
-
-    Returns:
-        str: Path to the saved artifact (relative to ARTIFACT_ROOT).
-    """
-    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
-    uid = str(uuid.uuid4())[:8]
-    suffix = file_ext.removeprefix(".")
-
-    folder = ensure_dir("artifacts", today)
-
-    path = folder / f"{uid}.{suffix}"
-    path.write_bytes(data)
-    return str(path)
-
-
-def load_artifact(path: str | Path) -> bytes:
-    """Load raw bytes from an artifact filepath.
+def load_artifact(path: str | Path | ArtifactRecord) -> bytes:
+    """Load raw bytes from an artifact path or record.
 
     Args:
-        path (str | Path): Path to the artifact file.
+        path (str | Path | ArtifactRecord): Artifact path or artifact record.
 
     Returns:
         bytes: The loaded bytes.
     """
-    return Path(path).read_bytes()
+    artifact_path = Path(path.path if isinstance(path, ArtifactRecord) else path)
+    return artifact_path.read_bytes()
 
 
 def load_pickle(path: str | Path | ArtifactRecord) -> Any:  # noqa: ANN401
@@ -383,36 +359,6 @@ def get_artifact(
         )
         raise ValueError(msg)
     return matches[0]
-
-
-def load_artifacts(log_path: str | Path, *, normalize: bool = True) -> pd.DataFrame:
-    """Load artifact metadata recorded in a sweep log.
-
-    Returns:
-        pd.DataFrame: One row per artifact entry found in the log.
-    """
-    log_df = load_log(log_path, normalize=False)
-    rows: list[dict[str, Any]] = []
-    for entry in log_df.to_dict(orient="records"):
-        artifacts = entry.get("artifacts")
-        if not isinstance(artifacts, list):
-            continue
-        rows.extend(
-            {
-                "benchmark": entry.get("benchmark"),
-                "sweep_id": entry.get("sweep_id"),
-                "rep": entry.get("rep"),
-                "status": entry.get("status"),
-                "attempt": entry.get("attempt"),
-                "config": entry.get("config"),
-                "artifact": artifact_entry,
-            }
-            for artifact_entry in artifacts
-        )
-    artifact_df = pd.DataFrame(rows)
-    if normalize and not artifact_df.empty:
-        artifact_df = pd.json_normalize(artifact_df.to_dict(orient="records"))
-    return artifact_df
 
 
 def clear_sweep_artifacts(sweep_id: str) -> None:

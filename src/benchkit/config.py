@@ -9,7 +9,7 @@ from pathlib import Path
 def benchkit_home() -> Path:
     """Return the root directory used for BenchKit outputs."""
     root = os.environ.get("BENCHKIT_HOME")
-    return Path(root).expanduser() if root else Path(".benchkit")
+    return Path(root).expanduser() if root else Path("~/.benchkit").expanduser()
 
 
 def ensure_dir(*parts: str) -> Path:

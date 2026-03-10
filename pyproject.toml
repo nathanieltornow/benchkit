@@ -44,6 +44,9 @@ dependencies = [
 ]
 dynamic = ["version"]
 
+[project.scripts]
+benchkit = "benchkit.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/benchkit"]
 
