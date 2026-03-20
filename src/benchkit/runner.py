@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
-import inspect
 import multiprocessing as mp
 import queue
-import random
 import time
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
-from itertools import product
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 import cloudpickle  # type: ignore[import-not-found]
@@ -30,12 +27,11 @@ from rich.table import Table
 from rich.text import Text
 
 from .artifacts import ArtifactIndex, RunContext, activated_context
-from .config import resolve_output_path
-from .logging import write_log_entry
-from .state import SweepState, case_key, state_path_for
+from .state import SweepState, case_key
+from .store import BenchkitStore
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping, Sequence
     from multiprocessing.context import SpawnContext, SpawnProcess
     from multiprocessing.queues import Queue
     from pathlib import Path
@@ -87,8 +83,16 @@ def _run_case_once(
     case: _Case,
     *,
     sweep_id: str,
+    benchmark_id: str,
+    sweep: str | None,
 ) -> tuple[Any, list[dict[str, Any]], None] | tuple[None, list[dict[str, Any]], Exception]:
-    ctx = RunContext(sweep_id=sweep_id, case_key=case.case_key, rep=case.rep)
+    ctx = RunContext(
+        sweep_id=sweep_id,
+        benchmark_id=benchmark_id,
+        sweep=sweep,
+        case_key=case.case_key,
+        rep=case.rep,
+    )
     try:
         with activated_context(ctx):
             result = fn(**case.config)
@@ -100,6 +104,8 @@ def _run_case_once(
 def _pool_worker_entry(
     fn_bytes: bytes,
     sweep_id: str,
+    benchmark_id: str,
+    sweep: str | None,
     worker_id: int,
     job_queue: Queue[Any],
     result_queue: Queue[Any],
@@ -115,6 +121,8 @@ def _pool_worker_entry(
             fn,
             job.case,
             sweep_id=sweep_id,
+            benchmark_id=benchmark_id,
+            sweep=sweep,
         )
         if exc is not None:
             result_queue.put(("result", worker_id, job.index, job.attempt, False, exc, artifacts))
@@ -122,81 +130,29 @@ def _pool_worker_entry(
         result_queue.put(("result", worker_id, job.index, job.attempt, True, result, artifacts))
 
 
-def _run_case_with_retries(
-    fn: Callable[..., Any],
-    case: _Case,
-    retries: int,
-    *,
-    sweep_id: str,
-    continue_on_failure: bool,
-    default_result: Any,  # noqa: ANN401
-) -> _CaseResult:
-    for attempt in range(1, retries + 1):
-        result, artifacts, exc = _run_case_once(
-            fn,
-            case,
-            sweep_id=sweep_id,
-        )
-        if exc is None:
-            return _CaseResult(
-                result=result,
-                outcome={"status": "ok", "attempt": attempt},
-                artifacts=artifacts,
-            )
-        if attempt < retries:
-            continue
-        if not continue_on_failure:
-            raise exc
-        return _CaseResult(
-            result=default_result,
-            outcome={
-                "status": "failure",
-                "attempt": attempt,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            },
-            artifacts=artifacts,
-        )
-
-    msg = "unreachable retry state"
-    raise AssertionError(msg)
-
-
 @dataclass(slots=True)
-class Sweep:
-    """Run a Cartesian-product parameter sweep with repeated trials."""
+class SweepRunner:
+    """Run one explicit list of benchmark cases."""
 
     id: str
     fn: Callable[..., Any]
-    params: Mapping[str, Iterable[Any]] = field(default_factory=dict)
-    repeat: int = 1
+    cases: Sequence[Mapping[str, Any]] = field(default_factory=list)
+    benchmark_id: str | None = None
+    sweep: str | None = None
     log_path: Path | str | None = None
-    shuffle: bool = False
-    seed: int | None = None
-    retries: int = 1
     timeout_seconds: float | None = None
     continue_on_failure: bool = True
-    default_result: Any = None
     max_workers: int = 1
     show_progress: bool = True
-    resume: bool = True
-    state_path: Path | None = None
 
     def __post_init__(self) -> None:
         """Validate the sweep configuration.
 
         Raises:
-            ValueError: If ``repeat``, ``retries``, or ``max_workers`` are
-                smaller than 1, or if ``timeout_seconds`` is not positive.
+            ValueError: If ``max_workers`` is smaller than 1 or if ``timeout_seconds`` is not positive.
         """
-        if self.repeat < 1:
-            msg = "repeat must be at least 1"
-            raise ValueError(msg)
         if not self.id.strip():
             msg = "id must not be empty"
-            raise ValueError(msg)
-        if self.retries < 1:
-            msg = "retries must be at least 1"
             raise ValueError(msg)
         if self.max_workers < 1:
             msg = "max_workers must be at least 1"
@@ -205,9 +161,15 @@ class Sweep:
             msg = "timeout_seconds must be > 0"
             raise ValueError(msg)
         if self.log_path is None:
-            self.log_path = f"{self.id}.jsonl"
-        if self.state_path is None:
-            self.state_path = state_path_for(self.id)
+            if self.sweep is not None and self.benchmark_id is not None:
+                self.log_path = BenchkitStore().log_path(
+                    benchmark_id=str(self.benchmark_id),
+                    sweep_id=self.sweep,
+                )
+            else:
+                self.log_path = f"{self.id}.jsonl"
+        if self.benchmark_id is None:
+            self.benchmark_id = self.id
 
     def run(self) -> list[R]:
         """Execute the benchmark function over all parameter combinations.
@@ -216,15 +178,14 @@ class Sweep:
             list[R]: Results in execution order.
         """
         init_time = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        store = BenchkitStore()
         benchmark_name = self.id
         fn_name = self.fn.__name__
-        all_cases = list(self._cases(self.fn, benchmark_name))
-        state = SweepState(cast("Path", self.state_path))
-        log_path = str(resolve_output_path(cast("str | Path", self.log_path), "logs"))
-        existing_log_rows = self._count_existing_rows(log_path)
-        completed_keys = (
-            state.completed_keys(benchmark_name=benchmark_name, log_path=log_path) if self.resume else set()
-        )
+        all_cases = list(self._cases(benchmark_name))
+        state = SweepState()
+        log_path = str(store.log_path(cast("str | Path", self.log_path)))
+        existing_log_rows = store.count_log_rows(log_path)
+        completed_keys = state.completed_keys(benchmark_name=benchmark_name, log_path=log_path)
         cases = [case for case in all_cases if case.case_key not in completed_keys]
         skipped_count = len(all_cases) - len(cases)
         self._print_start(
@@ -278,14 +239,32 @@ class Sweep:
         with self._live_dashboard() as progress:
             task_id = self._add_task(progress, benchmark_name, len(cases), counts)
             for case in cases:
-                case_result = _run_case_with_retries(
+                result, artifacts, exc = _run_case_once(
                     fn,
                     case,
-                    self.retries,
                     sweep_id=sweep_id,
-                    continue_on_failure=self.continue_on_failure,
-                    default_result=self.default_result,
+                    benchmark_id=str(self.benchmark_id),
+                    sweep=self.sweep,
                 )
+                if exc is None:
+                    case_result = _CaseResult(
+                        result=result,
+                        outcome={"status": "ok", "attempt": 1},
+                        artifacts=artifacts,
+                    )
+                elif not self.continue_on_failure:
+                    raise exc
+                else:
+                    case_result = _CaseResult(
+                        result=None,
+                        outcome={
+                            "status": "failure",
+                            "attempt": 1,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                        artifacts=artifacts,
+                    )
                 results.append(cast("R", case_result.result))
                 outcomes.append(case_result.outcome)
                 self._update_counts(counts, case_result)
@@ -328,6 +307,8 @@ class Sweep:
             ctx,
             fn_bytes,
             sweep_id,
+            str(self.benchmark_id),
+            self.sweep,
             result_queue,
         )
         worker_map = {worker.worker_id: worker for worker in workers}
@@ -401,11 +382,12 @@ class Sweep:
                     task_id,
                     ctx,
                     fn_bytes,
+                    str(self.benchmark_id),
+                    self.sweep,
                     sweep_id,
                     result_queue,
                     worker_map,
                     idle_workers,
-                    attempts_by_index,
                 )
 
         self._stop_worker_pool(workers)
@@ -429,17 +411,19 @@ class Sweep:
     ) -> None:
         updated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         attempt = int(case_result.outcome.get("attempt", 1))
-        write_log_entry(
-            cast("str | Path", self.log_path),
+        BenchkitStore().append_log_entry(
+            log_path=cast("str | Path", self.log_path),
             config=case.log_config,
             result=case_result.result,
             func_name=func_name,
             init_time=init_time,
             extra={
-                "benchmark": benchmark_name,
-                "sweep_id": sweep_id,
+                "benchmark": str(self.benchmark_id),
+                "storage_id": benchmark_name,
+                "sweep_id": self.sweep or sweep_id,
+                "case_key": case.case_key,
                 "rep": case.rep,
-                "rep_count": self.repeat,
+                "rep_count": 1,
                 "execution_mode": "parallel" if self.max_workers > 1 else "sequential",
                 "max_workers": self.max_workers,
                 "artifacts": case_result.artifacts,
@@ -469,6 +453,8 @@ class Sweep:
         ctx: SpawnContext,
         fn_bytes: bytes,
         sweep_id: str,
+        benchmark_id: str,
+        sweep: str | None,
         result_queue: Queue[Any],
     ) -> list[_WorkerState]:
         workers: list[_WorkerState] = []
@@ -476,7 +462,7 @@ class Sweep:
             job_queue: Queue[Any] = ctx.Queue()
             proc = ctx.Process(
                 target=_pool_worker_entry,
-                args=(fn_bytes, sweep_id, worker_id, job_queue, result_queue),
+                args=(fn_bytes, sweep_id, benchmark_id, sweep, worker_id, job_queue, result_queue),
             )
             proc.start()
             workers.append(_WorkerState(worker_id=worker_id, proc=proc, job_queue=job_queue))
@@ -512,7 +498,7 @@ class Sweep:
             raise payload
 
         return _CaseResult(
-            result=self.default_result,
+            result=None,
             outcome={
                 "status": "failure",
                 "attempt": attempt,
@@ -538,11 +524,12 @@ class Sweep:
         task_id: int | None,
         ctx: SpawnContext,
         fn_bytes: bytes,
+        worker_benchmark_id: str,
+        worker_sweep: str | None,
         worker_sweep_id: str,
         result_queue: Queue[Any],
         worker_map: dict[int, _WorkerState],
         idle_workers: list[int],
-        attempts_by_index: dict[int, int],
     ) -> None:
         if self.timeout_seconds is None:
             return
@@ -565,6 +552,8 @@ class Sweep:
                 args=(
                     fn_bytes,
                     worker_sweep_id,
+                    worker_benchmark_id,
+                    worker_sweep,
                     worker_id,
                     replacement_queue,
                     result_queue,
@@ -572,18 +561,6 @@ class Sweep:
             )
             replacement.start()
             worker_map[worker_id] = _WorkerState(worker_id=worker_id, proc=replacement, job_queue=replacement_queue)
-            if active_case.attempt < self.retries:
-                attempts_by_index[active_case.index] = active_case.attempt + 1
-                worker_map[worker_id].job_queue.put(
-                    _Job(
-                        case=active_case.case,
-                        index=active_case.index,
-                        attempt=active_case.attempt + 1,
-                    )
-                )
-                idle_workers[:] = [wid for wid in idle_workers if wid != worker_id]
-                continue
-
             idle_workers.append(worker_id)
 
             if not self.continue_on_failure:
@@ -591,7 +568,7 @@ class Sweep:
                 raise TimeoutError(msg)
 
             case_result = _CaseResult(
-                result=self.default_result,
+                result=None,
                 outcome={
                     "status": "timeout",
                     "attempt": active_case.attempt,
@@ -625,8 +602,7 @@ class Sweep:
     ) -> None:
         if not self.show_progress:
             return
-        log_path = resolve_output_path(cast("str | Path", self.log_path), "logs")
-        state_path = self.state_path
+        log_path = BenchkitStore().log_path(cast("str | Path", self.log_path))
         mode = "parallel" if self.max_workers > 1 else "sequential"
         table = Table.grid(expand=True)
         table.add_column(ratio=1)
@@ -642,8 +618,6 @@ class Sweep:
             (mode, "magenta"),
             ("   ", ""),
             (f"{self.max_workers} workers", "yellow"),
-            ("   ", ""),
-            (f"repeat {self.repeat}", "green"),
         )
         counts = Text.assemble(
             (f"{total_cases}", "bold"),
@@ -659,10 +633,6 @@ class Sweep:
             (str(existing_log_rows), "bold"),
             (" existing rows", "dim"),
         )
-        if self.resume:
-            paths.append("\n")
-            paths.append("state ", style="dim")
-            paths.append(str(state_path), style="default")
         table.add_row(title, counts)
         table.add_row(meta, "")
         table.add_row(paths, "")
@@ -707,7 +677,7 @@ class Sweep:
             progress.add_task(
                 f"Running {benchmark_name}",
                 total=total_cases,
-                counts=Sweep._counts_text(counts),
+                counts=SweepRunner._counts_text(counts),
             ),
         )
 
@@ -722,7 +692,7 @@ class Sweep:
         progress.update(
             task_id,
             advance=1,
-            counts=Sweep._counts_text(counts),
+            counts=SweepRunner._counts_text(counts),
         )
 
     @staticmethod
@@ -764,57 +734,17 @@ class Sweep:
         color = styles.get(status, "white")
         return f"[{color}]{status}[/{color}]"
 
-    @staticmethod
-    def _count_existing_rows(log_path: str) -> int:
-        path = resolve_output_path(log_path, "logs")
-        if not path.exists():
-            return 0
-        with path.open(encoding="utf-8") as handle:
-            return sum(1 for _ in handle)
-
-    def _cases(
-        self,
-        fn: Callable[..., R],
-        benchmark_name: str,
-    ) -> Iterator[_Case]:
-        sig = inspect.signature(fn)
-        param_names = tuple(self.params.keys())
-        param_values = [list(values) for values in self.params.values()]
-        if param_values:
-            combinations = [dict(zip(param_names, values, strict=True)) for values in product(*param_values)]
-        else:
-            combinations = [{}]
-
-        cases = [
-            self._make_case(sig, benchmark_name, rep, config)
-            for config in combinations
-            for rep in range(1, self.repeat + 1)
-        ]
-        if self.shuffle:
-            rng = random.Random(self.seed)  # noqa: S311
-            rng.shuffle(cases)
-        yield from cases
-
-    @staticmethod
-    def _make_case(
-        sig: inspect.Signature,
-        benchmark_name: str,
-        rep: int,
-        config: dict[str, Any],
-    ) -> _Case:
-        bound = sig.bind_partial(**config)
-        bound.apply_defaults()
-        log_config = dict(bound.arguments)
-        log_config.pop("ctx", None)
-        log_config.pop("self", None)
-        log_config.pop("cls", None)
-        return _Case(
-            rep=rep,
-            config=config,
-            log_config=log_config,
-            case_key=case_key(
-                benchmark_name=benchmark_name,
-                config=log_config,
+    def _cases(self, benchmark_name: str) -> Iterator[_Case]:
+        for config in self.cases:
+            log_config = dict(config)
+            rep = 1
+            yield _Case(
                 rep=rep,
-            ),
-        )
+                config=dict(config),
+                log_config=log_config,
+                case_key=case_key(
+                    benchmark_name=benchmark_name,
+                    config=log_config,
+                    rep=rep,
+                ),
+            )

@@ -1,21 +1,15 @@
 # benchkit
 
-`benchkit` is a small Python library for running parameter sweeps, logging benchmark results to JSONL, storing artifacts, and saving comparison plots.
+`benchkit` is a small Python library for benchmark sweeps with durable per-run artifacts and a simple analysis API.
 
-## What it provides
+## Core API
 
-- `benchkit.Sweep(...)` for explicit repeated benchmark sweeps with retries, timeout handling, and optional process parallelism
-- `benchkit.load_log(...)` and `benchkit.join_logs(...)` for analysis with pandas
-- `benchkit.context()` plus `get_artifact(...)` / `list_artifacts(...)` for indexed per-run artifacts
-- `benchkit.pplot(...)` for plot defaults and `benchkit.save_figure(...)` for saving figures
-
-By default, outputs go under `~/.benchkit/`:
-
-- `~/.benchkit/logs/`
-- `~/.benchkit/artifacts/`
-- `~/.benchkit/plots/`
-
-Set `BENCHKIT_HOME=/path/to/output-root` to override that location.
+- `@bk.func("...")` decorates a benchmark function.
+- Calling the decorated function runs one case and returns a read-only `Run`.
+- `.sweep(cases=[...])` runs many cases in the current sweep and skips cases that already completed successfully.
+- `bk.open_analysis("...")` reopens the current sweep for analysis and plotting.
+- `bk.context()` exposes the active run context for saving artifacts and metrics.
+- `bk.run(...)` executes an external command and captures stdout, stderr, and command metadata as artifacts.
 
 ## Install
 
@@ -23,133 +17,171 @@ Set `BENCHKIT_HOME=/path/to/output-root` to override that location.
 uv sync
 ```
 
-Or install it as a package in another project:
+Or install it into another project:
 
 ```bash
 uv add /path/to/benchkit
 ```
 
-## Quick example
+## Benchmark File Contract
+
+Benchmark files should export:
+
+- one decorated benchmark function, usually as `BENCH`
+- `CASES`, a list of explicit case objects or dicts
+
+The CLI uses that contract.
+
+## End-to-End Example
 
 ```python
 from __future__ import annotations
 
+import json
 import matplotlib.pyplot as plt
 
 import benchkit as bk
 
 
-def benchmark(size: int, backend: str) -> dict[str, float]:
-    runtime_ms = size / (4 if backend == "gpu" else 2)
-    throughput = size / runtime_ms
-    bk.context().save_json(
-        "summary.json",
-        {"size": size, "backend": backend, "runtime_ms": runtime_ms},
+@bk.func("routing-quality")
+def routing_quality(circuit: str, backend: str) -> None:
+    bk.context().save_json("case.json", {"circuit": circuit, "backend": backend})
+    result = bk.run(
+        [
+            "python3",
+            "-c",
+            (
+                "import json; "
+                "print(json.dumps({"
+                "'compile_time_ms': 12.5,"
+                "'swap_count': 7,"
+                "'estimated_fidelity': 0.93"
+                "}))"
+            ),
+        ],
+        name="compiler",
     )
-    bk.context().save_pickle("summary.pkl", {"runtime_ms": runtime_ms})
-    return {"runtime_ms": runtime_ms, "throughput": throughput}
+    payload = json.loads(result.stdout)
+    bk.context().save_result(
+        {
+            "compile_time_ms": float(payload["compile_time_ms"]),
+            "swap_count": int(payload["swap_count"]),
+            "estimated_fidelity": float(payload["estimated_fidelity"]),
+        }
+    )
 
 
-sweep = bk.Sweep(
-    id="matrix",
-    fn=benchmark,
-    params={"size": [128, 256, 512], "backend": ["cpu", "gpu"]},
-    repeat=5,
-    retries=2,
-    timeout_seconds=30,
-    continue_on_failure=True,
-    default_result={"runtime_ms": float("inf"), "throughput": 0.0},
-    max_workers=1,
+BENCH = routing_quality
+CASES = [
+    {"circuit": "ghz_16", "backend": "cpu"},
+    {"circuit": "ghz_16", "backend": "gpu"},
+    {"circuit": "qaoa_20", "backend": "cpu"},
+    {"circuit": "qaoa_20", "backend": "gpu"},
+]
+
+
+analysis = routing_quality.sweep(cases=CASES, timeout_seconds=60, max_workers=2)
+df = analysis.load_frame()
+analysis.save_dataframe(df, "raw-results", file_format="csv")
+
+run = analysis.get_run(
+    config={"circuit": "ghz_16", "backend": "cpu"}, rep=1, status="ok"
 )
-sweep.run()
-df = bk.load_log("matrix.jsonl")
-summary = bk.get_artifact(
-    "matrix",
-    config={"size": 128, "backend": "cpu"},
-    rep=1,
-    name="summary.pkl",
-)
-payload = bk.load_pickle(summary)
+stdout = run.read_text("compiler.stdout.txt")
 
 with bk.pplot():
-    fig, ax = plt.subplots()
-    bk.bar_comparison(
-        ax,
-        df,
-        keys=["result.runtime_ms", "result.throughput"],
-        group_key="config.size",
-        error=None,
-    )
-    ax.legend()
+    FIGURE_WIDTH_MM = 180.0
+    FIGURE_HEIGHT_MM = 45.0
+    THEME = {
+        "cpu": {"color": "#4477AA", "marker": "o", "linestyle": "-", "hatch": None},
+        "gpu": {"color": "#EE6677", "marker": "s", "linestyle": "--", "hatch": "//"},
+    }
 
-bk.save_figure(fig, plot_name="matrix-summary")
+    fig, ax = plt.subplots(figsize=(FIGURE_WIDTH_MM / 25.4, FIGURE_HEIGHT_MM / 25.4))
+    summary = df.groupby("config.backend", as_index=False)[
+        ["result.compile_time_ms"]
+    ].mean()
+    for _, row in summary.iterrows():
+        style = THEME[row["config.backend"]]
+        ax.bar(
+            row["config.backend"],
+            row["result.compile_time_ms"],
+            color=style["color"],
+            edgecolor="black",
+            hatch=style["hatch"],
+        )
+
+analysis.save_figure(fig, plot_name="routing-quality-runtime")
 ```
 
-## Data model
+For a single case:
 
-Each log row contains:
+```python
+run = routing_quality(circuit="ghz_16", backend="cpu")
+print(run.metrics)
+```
 
-- `config`: bound function arguments, excluding `self` and `cls`
-- `result`: the returned value
-- `id`: short run id
-- `func_name`
-- `init_time`
-- `timestamp`
-- `host`
-- `git_commit`
-- `git_dirty`
-- `benchmark`
-- `sweep_id`
-- `rep`
-- `rep_count`
-- `status`
-- `attempt`
-- `execution_mode`
-- `max_workers`
-- `error_type` and `error_message` for failed or timed-out cases
+For later analysis:
 
-`load_log(..., normalize=True)` flattens nested fields into columns such as `config.size` and `result.runtime_ms`.
-`list_artifacts(...)` and `get_artifact(...)` query the SQLite artifact index directly.
-
-## Typical workflow
-
-1. Write a benchmark function that returns a JSON-serializable result dict.
-   If you need per-run files, call `bk.context()` inside the function and save artifacts through it.
-2. Run it with `Sweep(id=..., fn=..., repeat=5)`.
-3. Load the JSONL log with `load_log`.
-4. Fetch recorded artifacts with `get_artifact(...)` or `list_artifacts(...)` when needed.
-5. Use pandas directly or pass the dataframe to plotting helpers.
-6. Build figures inside `pplot` and write them with `save_figure`.
+```python
+analysis = bk.open_analysis("routing-quality")
+df = analysis.load_frame()
+for run in analysis.load_runs(status="ok"):
+    print(run.config, run.metrics)
+```
 
 ## CLI
 
-BenchKit also ships a small operational CLI:
+Run the current sweep:
 
 ```bash
-benchkit logs
-benchkit summary simple
-benchkit watch simple
-benchkit artifacts list simple
-benchkit artifacts get simple --config n=1 --config lr=0.01 --rep 1 --name metrics.pkl
-benchkit artifacts clear simple --yes
+benchkit run benchmarks/routing_quality.py
 ```
 
-## Notes
+Start a fresh sweep:
 
-- `Sweep` runs the Cartesian product of `params` and repeats each case `repeat` times.
-- `Sweep` can retry failed cases and convert failures/timeouts into a default result when `continue_on_failure=True`.
-- `Sweep(max_workers>1)` uses process-based parallel execution while keeping log writing in the parent process.
-- For publishable runtime measurements, prefer `max_workers=1` to avoid cross-case resource contention.
-- `Sweep(id="matrix", ...)` defaults to `~/.benchkit/logs/matrix.jsonl` and `~/.benchkit/state/matrix.sqlite`.
-- `Sweep(resume=True)` skips previously successful `(benchmark, config, rep)` cases for that sweep id and log path.
-- If the sweep function calls `bk.context()`, artifacts are stored under `~/.benchkit/artifacts/<id>/<case-key>/rep-<n>/`.
-- BenchKit also indexes artifacts in `~/.benchkit/state/artifacts.sqlite`.
-- Use `get_artifact("matrix", config={...}, rep=1, name="summary.pkl")` to fetch one artifact directly.
-- Use `list_artifacts("matrix", config={...})` to inspect all indexed artifacts for one input.
-- Use `load_pickle(...)` for artifacts stored with `save_pickle(...)`.
-- Use `clear_sweep_artifacts("matrix")` to remove all stored artifacts for a sweep id.
-- If you use `timeout_seconds` in a script entrypoint, guard execution with `if __name__ == "__main__":`.
-- Relative log paths resolve to JSONL files under `~/.benchkit/logs/`.
-- `pplot` applies portable matplotlib defaults.
-- `save_figure` writes timestamped output files.
-  See [examples/simple.py](/Users/nathanieltornow/code/benchkit/examples/simple.py) for a runnable example.
+```bash
+benchkit run benchmarks/routing_quality.py --new-sweep
+```
+
+List sweeps:
+
+```bash
+benchkit sweeps
+benchkit sweeps routing-quality
+```
+
+List runs:
+
+```bash
+benchkit runs routing-quality
+benchkit runs routing-quality --sweep 20260320T153015123456Z
+benchkit runs routing-quality --status ok
+```
+
+## Storage Layout
+
+By default, BenchKit writes to the project-local `.benchkit/` directory rooted at the nearest parent containing `pyproject.toml`, `.git`, or `setup.py`.
+
+```text
+.benchkit/
+  benchmarks.sqlite
+  executions.jsonl
+  runs/<benchmark-id>/<sweep-id>/log.jsonl
+  runs/<benchmark-id>/<sweep-id>/<run-id>/
+  analysis/<benchmark-id>--<sweep-id>/
+```
+
+Set `BENCHKIT_HOME=/path/to/output-root` to override that location.
+
+## Conventions
+
+- Use explicit `cases=[...]` as the main sweep API. `bk.grid(...)` is only a convenience for simple Cartesian products.
+- Inside the benchmark function, call `bk.context().save_result({...})` once for the canonical final metric row.
+- Use `bk.context().append_result({...})` for repeated internal samples.
+- Save anything needed later that is not a primary metric as an artifact.
+- Prefer `bk.run(...)` for external commands.
+- `bk.open_analysis("benchmark-id")` opens the current sweep by default.
+- Use `max_workers=1` for timing-sensitive benchmarks unless parallelism is clearly safe.
+- Plot scripts should use `180 mm` width for double-column figures and `80 mm` for single-column figures, with a slim height chosen explicitly.
+- Every plotting script should define an explicit theme mapping for colors, markers, line styles, and hatches when relevant.

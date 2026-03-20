@@ -1,35 +1,29 @@
-"""SQLite-backed sweep state cache for resumable benchmark runs."""
+"""Compatibility wrapper for BenchKit resume state."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .config import ensure_dir
+from .store import BenchkitStore, store_path
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
 def default_state_path() -> Path:
-    """Return the default SQLite path for sweep state."""
-    return ensure_dir("state") / "sweeps.sqlite"
+    """Return the central SQLite path for benchmark resume state."""
+    return store_path()
 
 
-def state_path_for(sweep_id: str) -> Path:
-    """Return the default SQLite resume cache path for one sweep id."""
-    return ensure_dir("state") / f"{sweep_id}.sqlite"
+def state_path_for(_: str) -> Path:
+    """Return the central SQLite path for benchmark resume state."""
+    return store_path()
 
 
-def case_key(
-    *,
-    benchmark_name: str,
-    config: dict[str, Any],
-    rep: int,
-) -> str:
+def case_key(*, benchmark_name: str, config: dict[str, Any], rep: int) -> str:
     """Return a stable hash for one benchmark repetition."""
     payload = json.dumps(
         {"benchmark": benchmark_name, "config": config, "rep": rep},
@@ -41,49 +35,23 @@ def case_key(
 
 @dataclass(slots=True)
 class SweepState:
-    """Track completed sweep cases so later runs can resume."""
+    """Compatibility wrapper around the central store's resume-case helpers."""
 
     path: Path = field(default_factory=default_state_path)
 
-    def __post_init__(self) -> None:
-        """Create the backing schema if needed."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS cases (
-                    case_key TEXT PRIMARY KEY,
-                    benchmark_name TEXT NOT NULL,
-                    rep INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    config_json TEXT NOT NULL,
-                    log_path TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
+    def completed_keys(self, *, benchmark_name: str, log_path: str) -> set[str]:
+        """Return the keys of previously successful cases for one log."""
+        return BenchkitStore(self.path).completed_resume_keys(
+            benchmark_name=benchmark_name,
+            log_path=log_path,
+        )
 
-    def completed_keys(
-        self,
-        *,
-        benchmark_name: str,
-        log_path: str,
-    ) -> set[str]:
-        """Return the cache keys for previously successful cases."""
-        with sqlite3.connect(self.path) as conn:
-            rows = conn.execute(
-                """
-                SELECT case_key
-                FROM cases
-                WHERE benchmark_name = ?
-                  AND log_path = ?
-                  AND status = 'ok'
-                """,
-                (benchmark_name, log_path),
-            ).fetchall()
-        return {row[0] for row in rows}
+    def sync_from_log(self, *, benchmark_name: str, log_path: str) -> None:
+        """Rebuild cached case state from the canonical JSONL log."""
+        BenchkitStore(self.path).sync_resume_cases_from_log(
+            benchmark_name=benchmark_name,
+            log_path=log_path,
+        )
 
     def record_case(
         self,
@@ -96,40 +64,20 @@ class SweepState:
         log_path: str,
         updated_at: str,
     ) -> None:
-        """Insert or update the cached state for one case."""
-        with sqlite3.connect(self.path) as conn:
-            conn.execute(
-                """
-                INSERT INTO cases (
-                    case_key,
-                    benchmark_name,
-                    rep,
-                    status,
-                    config_json,
-                    log_path,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(case_key) DO UPDATE SET
-                    status=excluded.status,
-                    config_json=excluded.config_json,
-                    log_path=excluded.log_path,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    case_key,
-                    benchmark_name,
-                    rep,
-                    status,
-                    json.dumps(config, default=str, sort_keys=True),
-                    log_path,
-                    updated_at,
-                ),
-            )
+        """Insert or update one cached case row."""
+        BenchkitStore(self.path).record_resume_case(
+            case_key=case_key,
+            benchmark_name=benchmark_name,
+            rep=rep,
+            status=status,
+            config=config,
+            log_path=log_path,
+            updated_at=updated_at,
+        )
 
     def clear_cases(self, *, benchmark_name: str, log_path: str) -> None:
         """Remove cached state for one benchmark/log pair."""
-        with sqlite3.connect(self.path) as conn:
-            conn.execute(
-                "DELETE FROM cases WHERE benchmark_name = ? AND log_path = ?",
-                (benchmark_name, log_path),
-            )
+        BenchkitStore(self.path).clear_resume_cases(
+            benchmark_name=benchmark_name,
+            log_path=log_path,
+        )

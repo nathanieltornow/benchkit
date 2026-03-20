@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import time
 from pathlib import Path
@@ -13,8 +14,9 @@ from rich.live import Live
 from rich.table import Table
 
 from .artifacts import ArtifactRecord, clear_sweep_artifacts, get_artifact, list_artifacts
+from .benchmark import BenchFunction
 from .config import benchkit_home, resolve_output_path
-from .logging import load_log
+from .store import BenchkitStore, IndexedRun, SweepRecord, log_execution_event
 
 console = Console()
 app = typer.Typer(help="Manage BenchKit logs, artifacts, and live watch views.")
@@ -65,6 +67,9 @@ def _resolve_log_target(target: str) -> Path:
     candidate = Path(target)
     if candidate.suffix == ".jsonl" or candidate.is_absolute() or candidate.parent != Path():
         return resolve_output_path(candidate, "logs")
+    if "--" in target:
+        benchmark_id, sweep_id = target.split("--", 1)
+        return BenchkitStore().log_path(benchmark_id=benchmark_id, sweep_id=sweep_id)
     return resolve_output_path(f"{target}.jsonl", "logs")
 
 
@@ -121,7 +126,7 @@ def _logs_table(logs: list[Path]) -> Table:
         pad_edge=False,
         expand=True,
     )
-    table.add_column("Sweep", header_style="dim")
+    table.add_column("Log", header_style="dim")
     table.add_column("Path", header_style="dim")
     table.add_column("Rows", justify="right", header_style="dim")
     table.add_column("Updated", header_style="dim")
@@ -166,40 +171,81 @@ def _artifact_table(records: list[ArtifactRecord]) -> Table:
     return table
 
 
-def _summary_panel(log_path: Path) -> Table:
-    """Build a compact summary table for one log.
-
-    Returns:
-        Table: Renderable summary table.
-    """
-    log_df = load_log(log_path, normalize=False)
-    row_count = len(log_df)
-    statuses = log_df["status"].value_counts(dropna=False).to_dict() if "status" in log_df else {}
-    config_keys: set[str] = set()
-    result_keys: set[str] = set()
-    for entry in log_df.to_dict(orient="records"):
-        config = entry.get("config")
-        result = entry.get("result")
-        if isinstance(config, dict):
-            config_keys.update(config)
-        if isinstance(result, dict):
-            result_keys.update(result)
-
-    table = Table(
-        title=f"summary {log_path.stem}",
-        title_justify="left",
-        box=None,
-        show_edge=False,
-        pad_edge=False,
-    )
-    table.add_column("Field", header_style="dim")
-    table.add_column("Value")
-    table.add_row("log", str(log_path))
-    table.add_row("rows", str(row_count))
-    table.add_row("status", str(statuses or {"ok": row_count}))
-    table.add_row("config", ", ".join(sorted(config_keys)) or "-")
-    table.add_row("result", ", ".join(sorted(result_keys)) or "-")
+def _sweeps_table(records: list[SweepRecord]) -> Table:
+    table = Table(title="sweeps", title_justify="left", box=None, show_edge=False, pad_edge=False, expand=True)
+    table.add_column("Benchmark", header_style="dim")
+    table.add_column("Sweep", header_style="dim")
+    table.add_column("Current", header_style="dim")
+    table.add_column("Created", header_style="dim")
+    table.add_column("Source", header_style="dim")
+    for record in records:
+        table.add_row(
+            record.benchmark_id,
+            record.sweep_id,
+            "*" if record.is_current else "",
+            record.created_at,
+            record.source_path,
+        )
     return table
+
+
+def _runs_table(records: list[IndexedRun]) -> Table:
+    table = Table(title="runs", title_justify="left", box=None, show_edge=False, pad_edge=False, expand=True)
+    table.add_column("Benchmark", header_style="dim")
+    table.add_column("Sweep", header_style="dim")
+    table.add_column("Rep", justify="right", header_style="dim")
+    table.add_column("Status", header_style="dim")
+    table.add_column("Config", header_style="dim")
+    table.add_column("Path", header_style="dim")
+    for record in records:
+        table.add_row(
+            record.benchmark_id,
+            record.sweep_id,
+            str(record.rep),
+            record.status,
+            _format_config(record.config),
+            record.run_path,
+        )
+    return table
+
+
+def _load_benchmark_from_path(path: str | Path) -> tuple[BenchFunction, list[dict[str, Any]], Path]:
+    source_path = Path(path).resolve()
+    spec = importlib.util.spec_from_file_location("benchkit_benchmark_definition", source_path)
+    if spec is None or spec.loader is None:
+        msg = f"Could not load benchmark definition from {source_path}"
+        raise typer.BadParameter(msg)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if hasattr(module, "BENCH"):
+        benchmark = module.BENCH
+    else:
+        exported = [value for value in vars(module).values() if isinstance(value, BenchFunction)]
+        if len(exported) == 1:
+            benchmark = exported[0]
+        else:
+            msg = f"{source_path} must export one decorated bench function or BENCH"
+            raise typer.BadParameter(msg)
+    if not isinstance(benchmark, BenchFunction):
+        msg = f"{source_path} did not produce a benchkit bench function"
+        raise typer.BadParameter(msg)
+    if not hasattr(module, "CASES"):
+        msg = f"{source_path} must define CASES for CLI sweep execution"
+        raise typer.BadParameter(msg)
+    cases_value = module.CASES
+    if not isinstance(cases_value, list):
+        msg = f"{source_path} CASES must be a list of case objects"
+        raise typer.BadParameter(msg)
+    return benchmark, [_parse_case(case) for case in cases_value], source_path
+
+
+def _parse_case(case: object) -> dict[str, Any]:
+    if isinstance(case, dict):
+        return dict(case)
+    if hasattr(case, "__dict__"):
+        return {key: value for key, value in vars(case).items() if not key.startswith("_")}
+    msg = "CLI cases must be mappings or simple objects."
+    raise typer.BadParameter(msg)
 
 
 def _watch_render(log_path: Path, limit: int) -> Table:
@@ -242,19 +288,78 @@ def logs_list() -> None:
     Raises:
         typer.Exit: If no logs are available.
     """
-    log_dir = benchkit_home() / "logs"
-    logs = sorted(log_dir.glob("*.jsonl"))
+    logs = sorted((benchkit_home() / "runs").glob("*/*/log.jsonl"))
     if not logs:
         console.print("[dim]No BenchKit logs found.[/dim]")
         raise typer.Exit
     console.print(_logs_table(logs))
 
 
-@app.command()  # type: ignore[misc]
-def summary(target: str) -> None:
-    """Print a compact summary for one sweep log."""
-    log_path = _resolve_log_target(target)
-    console.print(_summary_panel(log_path))
+@app.command("run")  # type: ignore[misc]
+def run_benchmark(
+    benchmark_file: str,
+    new_sweep: Annotated[bool, typer.Option("--new-sweep", help="Start a fresh sweep.")] = False,  # noqa: FBT002
+) -> None:
+    """Run one benchmark definition file through the current or a new sweep."""
+    benchmark, cases, source_path = _load_benchmark_from_path(benchmark_file)
+    registry = BenchkitStore()
+    benchmark_id = benchmark.id
+    sweep = registry.current_sweep(benchmark_id)
+    if new_sweep or sweep is None:
+        sweep = registry.create_sweep(benchmark_id=benchmark_id, source_path=str(source_path))
+    log_execution_event(event="benchmark_started", benchmark_id=benchmark_id, sweep_id=sweep)
+    analysis = benchmark.sweep(cases=cases, sweep=sweep, show_progress=True)
+    registry.index_runs(
+        benchmark_id=benchmark_id,
+        sweep_id=sweep,
+        storage_id=f"{benchmark_id}--{sweep}",
+        runs=analysis.load_runs(),
+    )
+    log_execution_event(
+        event="benchmark_finished",
+        benchmark_id=benchmark_id,
+        sweep_id=sweep,
+        payload={"storage_id": f"{benchmark_id}--{sweep}"},
+    )
+    console.print(f"[green]Completed {benchmark_id} sweep {sweep}[/green]")
+
+
+@app.command("sweeps")  # type: ignore[misc]
+def sweeps_list(
+    benchmark_id: Annotated[str | None, typer.Argument(help="Optional benchmark id.")] = None,
+) -> None:
+    """List registered sweeps.
+
+    Raises:
+        typer.Exit: If no sweeps are available.
+    """
+    records = BenchkitStore().list_sweeps(benchmark_id=benchmark_id)
+    if not records:
+        console.print("[dim]No sweeps found.[/dim]")
+        raise typer.Exit
+    console.print(_sweeps_table(records))
+
+
+@app.command("runs")  # type: ignore[misc]
+def runs_list(
+    benchmark_id: str,
+    sweep: Annotated[str | None, typer.Option(help="Filter by sweep id.")] = None,
+    status: Annotated[str | None, typer.Option(help="Filter by run status.")] = None,
+) -> None:
+    """List indexed runs from the global project registry.
+
+    Raises:
+        typer.Exit: If no runs are available.
+    """
+    records = BenchkitStore().list_runs(
+        benchmark_id=benchmark_id,
+        sweep_id=sweep,
+        status=status,
+    )
+    if not records:
+        console.print("[dim]No runs found.[/dim]")
+        raise typer.Exit
+    console.print(_runs_table(records))
 
 
 @app.command()  # type: ignore[misc]
@@ -324,17 +429,14 @@ def artifacts_get(
 @artifacts_app.command("clear")  # type: ignore[misc]
 def artifacts_clear(
     sweep_id: str,
-    yes: Annotated[
-        str | None,
-        typer.Option("--yes", flag_value="yes", help="Skip the confirmation prompt."),
-    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", help="Skip the confirmation prompt.")] = False,  # noqa: FBT002
 ) -> None:
     """Delete stored artifacts for one sweep.
 
     Raises:
         typer.Exit: If the deletion is not confirmed.
     """
-    if yes != "yes" and not typer.confirm(f"Delete all artifacts for sweep {sweep_id!r}?"):
+    if not yes and not typer.confirm(f"Delete all artifacts for sweep {sweep_id!r}?"):
         raise typer.Exit
     clear_sweep_artifacts(sweep_id)
     console.print(f"[green]Cleared artifacts for {sweep_id}[/green]")

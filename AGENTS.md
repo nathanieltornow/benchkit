@@ -1,44 +1,55 @@
 # Agent Notes
 
-Use `benchkit` as a local library for benchmark orchestration, JSONL run logging, and plot generation.
+Use `benchkit` as a local library for benchmark execution, artifact capture, and later analysis.
 
-## Recommended pattern
+## Preferred API
 
 1. Import `benchkit as bk`.
-2. Put the benchmark body in a pure function that returns a JSON-serializable dict.
-3. Prefer `bk.Sweep(id=..., fn=..., params=..., repeat=5)` for repeated parameter sweeps.
-4. Use `Sweep` options like `retries=...`, `timeout_seconds=...`, and `continue_on_failure=True` for run reliability.
-5. Execute the sweep once to generate the full benchmark log.
-6. Read results with `bk.load_log(...)`.
-7. If the sweep stores artifacts, fetch them with `bk.get_artifact(...)` or inspect them with `bk.list_artifacts(...)`.
-8. Create figures inside `with bk.pplot(...):` and save them with `bk.save_figure(...)`.
-9. Use the `benchkit` CLI for operational tasks like watching logs and resolving artifacts.
+2. Define benchmarks with `@bk.func("benchmark-id")`.
+3. Inside the benchmark function:
+   - write the canonical final metrics with `bk.context().save_result({...})`
+   - write repeated internal samples with `bk.context().append_result({...})`
+   - save all non-metric evidence as artifacts
+4. Call the decorated function directly for a single case.
+5. Use `.sweep(cases=...)` for many cases.
+6. Reopen stored runs with `bk.open_analysis("benchmark-id")`.
 
-## Conventions
+## Benchmark Rules
 
-- Relative log paths are written to JSONL files under `~/.benchkit/logs/`.
-- Artifacts are written to `~/.benchkit/artifacts/`.
-- If a sweep function calls `bk.context()`, per-case artifacts go under `~/.benchkit/artifacts/<id>/<case-key>/rep-<n>/`.
-- Plots are written to `~/.benchkit/plots/`.
-- Sweep resume state is cached per sweep id under `~/.benchkit/state/<id>.sqlite` by default.
-- Sweep logs include `benchmark`, `sweep_id`, `rep`, `rep_count`, `status`, `attempt`, `execution_mode`, and `max_workers`.
-- Set `BENCHKIT_HOME` to move all of those directories.
+- Use explicit case lists as the main sweep API.
+- Use `bk.grid(...)` only for simple Cartesian products.
+- Sweeps are the only lineage mechanism.
+- Resume is always on within the current sweep.
+- Start a new sweep only when you want a fresh benchmark campaign.
+- If a benchmark calls external tools, prefer `bk.run(...)`.
+- If something matters later and it is not a logged metric, save it as an artifact.
 
-## Return shapes
+## Analysis Rules
 
-- Prefer flat metric dicts such as `{"runtime_ms": 12.3, "accuracy": 0.94}`.
-- Avoid returning custom classes unless they stringify cleanly in logs.
-- For sweep-local files, prefer `bk.context().save_json(...)`, `bk.context().save_text(...)`, `bk.context().save_bytes(...)`, or `bk.context().copy_file(...)`.
-- For Python objects, prefer `bk.context().save_pickle(...)` and load them back with `bk.load_pickle(...)`.
+- Use `analysis.load_frame()` for dataframe-based analysis.
+- Use `analysis.load_runs()` or `analysis.get_run(...)` when you need artifacts.
+- Save derived tables under `analysis.paths.root / "data"/`.
+- Save figures with `analysis.save_figure(...)`.
+- Reports are agent-managed Markdown files under `analysis.paths.root / "reports"/`.
+- Every report must include a rerun command or short rerun procedure.
 
-## Plotting
+## Plot Rules
 
-- `bk.bar_comparison(...)`, `bk.line_comparison(...)`, and `bk.scatter_comparison(...)` expect a pandas dataframe.
-- With normalized logs, use columns like `config.batch_size` and `result.runtime_ms`.
-- `bk.pplot(...)` applies the default plotting style.
-- `bk.save_figure(...)` saves timestamped figures automatically.
+- Use `with bk.pplot():` for shared style only.
+- Plot logic should stay in normal matplotlib, pandas, or seaborn code.
+- Use `FIGURE_WIDTH_MM = 180.0` for double-column figures.
+- Use `FIGURE_WIDTH_MM = 80.0` for single-column figures.
+- Choose a slim `FIGURE_HEIGHT_MM` explicitly.
+- The house default for slim double-column figures is `45.0 mm`.
+- For bar plots, use patches with visible outlines.
+- For slim figures, avoid sparse hatches like `/` when they need to stay visible. Prefer `//` or `///`.
+- Every plotting script should define an explicit theme mapping.
+- Reuse the same visual encoding for recurring labels across related figures.
 
-## Failure handling
+## Storage Conventions
 
-- `bk.Sweep(...)` supports `retries=...`, `timeout_seconds=...`, `continue_on_failure=True`, `default_result=...`, `max_workers=...`, and `resume=True`.
-- Use `max_workers=1` for timing-sensitive benchmarks unless the user explicitly accepts contention.
+- BenchKit writes to the project-local `.benchkit/` directory by default.
+- The global project registry is `.benchkit/benchmarks.sqlite`.
+- The execution event log is `.benchkit/executions.jsonl`.
+- Run folders live under `.benchkit/runs/<benchmark-id>/<sweep-id>/<run-id>/`.
+- Analysis outputs live under `.benchkit/analysis/<benchmark-id>--<sweep-id>/`.
