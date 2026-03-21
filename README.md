@@ -14,37 +14,28 @@
 ## Install
 
 ```bash
-uv sync
-```
-
-Or install it into another project:
-
-```bash
-uv add /path/to/benchkit
+uv add git+https://github.com/nathanieltornow/benchkit@v0.0.1
 ```
 
 ## Set Up in a New Project
 
-### Option A: Copy the skill folder (simplest)
-
-Copy `skills/benchkit/` from this repo into your project or global Claude Code skills:
-
 ```bash
-# Per-project
-cp -r /path/to/benchkit/skills/benchkit ~/.claude/skills/
+# 1. Add benchkit to your project
+uv add git+https://github.com/nathanieltornow/benchkit@v0.0.1
 
-# Or into a specific project
-cp -r /path/to/benchkit/skills/benchkit my-project/.claude/skills/
+# 2. Install the Claude Code skills (experiment + plotting)
+benchkit init
 ```
 
-### Option B: Use the CLI
+This creates `.claude/skills/benchkit/` and `.claude/skills/benchkit-plot/` in your project. Claude Code auto-discovers both skills and can use them automatically or via `/benchkit`. Your project's `AGENTS.md` stays untouched.
+
+To install globally (every Claude Code conversation):
 
 ```bash
-benchkit init                # project-local: .claude/skills/benchkit/SKILL.md
-benchkit install-skill       # global: ~/.claude/skills/benchkit/SKILL.md
+benchkit install-skill
 ```
 
-Claude Code auto-discovers the skill and can use it automatically or via `/benchkit`. Your project's `AGENTS.md` stays untouched. The project itself can be in any language.
+The project itself can be in any language.
 
 ## End-to-End Example
 
