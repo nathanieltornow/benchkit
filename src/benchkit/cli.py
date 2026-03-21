@@ -23,7 +23,7 @@ def _skill_source() -> Path:
     Returns:
         Path: The skill file path.
     """
-    return Path(str(importlib.resources.files("benchkit") / "skill.md"))
+    return Path(str(importlib.resources.files("benchkit") / "SKILL.md"))
 
 
 def _format_config(config: dict[str, Any], max_len: int = 48) -> str:
