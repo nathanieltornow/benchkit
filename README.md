@@ -32,7 +32,15 @@ cd ~/my-rust-project
 benchkit init
 ```
 
-This copies `BENCHKIT.md` (the agent skill file) and adds a reference to your `CLAUDE.md` so that AI agents automatically know how to use benchkit for experiments in that project. The project itself can be in any language.
+This appends the benchkit skill to `CLAUDE.md` (local, typically gitignored) so that AI agents automatically know how to use benchkit for experiments in that project. Your project's `AGENTS.md` stays untouched.
+
+To install globally (every Claude Code conversation):
+
+```bash
+benchkit install-skill
+```
+
+The project itself can be in any language.
 
 ## End-to-End Example
 

@@ -112,8 +112,9 @@ def init(
 ) -> None:
     """Set up BenchKit in a project directory.
 
-    Appends the full benchkit skill to AGENTS.md so that AI agents
-    automatically know how to use benchkit in this project.
+    Appends the benchkit skill to CLAUDE.md (local, typically gitignored)
+    so that AI agents know how to use benchkit in this project without
+    polluting your project's AGENTS.md.
 
     Raises:
         Exit: If the target directory does not exist.
@@ -123,20 +124,20 @@ def init(
         console.print(f"[red]Directory {target_dir} does not exist.[/red]")
         raise typer.Exit(1)
 
-    agents_md = target_dir / "AGENTS.md"
+    claude_md = target_dir / "CLAUDE.md"
     skill = _skill_content()
     marker = "# BenchKit -- Agentic Experiment Skill"
 
-    if agents_md.exists():
-        existing = agents_md.read_text(encoding="utf-8")
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
         if marker in existing:
-            console.print("[dim]AGENTS.md already contains the benchkit skill, skipping.[/dim]")
+            console.print("[dim]CLAUDE.md already contains the benchkit skill, skipping.[/dim]")
             return
-        agents_md.write_text(existing.rstrip() + "\n\n" + skill, encoding="utf-8")
-        console.print(f"[green]Appended benchkit skill to {agents_md}[/green]")
+        claude_md.write_text(existing.rstrip() + "\n\n" + skill, encoding="utf-8")
+        console.print(f"[green]Appended benchkit skill to {claude_md}[/green]")
     else:
-        agents_md.write_text(skill, encoding="utf-8")
-        console.print(f"[green]Created {agents_md} with benchkit skill[/green]")
+        claude_md.write_text(skill, encoding="utf-8")
+        console.print(f"[green]Created {claude_md} with benchkit skill[/green]")
 
 
 @app.command("install-skill")  # type: ignore[misc]
