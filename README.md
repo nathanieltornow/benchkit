@@ -1,15 +1,15 @@
 # benchkit
 
-`benchkit` is a small Python library for benchmark sweeps with durable per-run artifacts and a simple analysis API.
+`benchkit` is a small Python library for running benchmark sweeps, capturing artifacts, and analyzing results. It works with any workload -- Python functions, compiled binaries, shell scripts, or external tools in any language.
 
 ## Core API
 
 - `@bk.func("...")` decorates a benchmark function.
 - Calling the decorated function runs one case and returns a read-only `Run`.
-- `.sweep(cases=[...])` runs many cases in the current sweep and skips cases that already completed successfully.
-- `bk.open_analysis("...")` reopens the current sweep for analysis and plotting.
+- `.sweep(cases=[...])` runs many cases in the current sweep, skipping cases that already completed. Pass `max_workers=N` to run N cases in parallel.
+- `bk.open_analysis("...")` reopens a stored sweep for analysis and plotting.
 - `bk.context()` exposes the active run context for saving artifacts and metrics.
-- `bk.run(...)` executes an external command and captures stdout, stderr, and command metadata as artifacts.
+- `bk.run(...)` executes an external command (any language/binary) and captures stdout, stderr, and metadata as artifacts.
 
 ## Install
 
@@ -23,14 +23,16 @@ Or install it into another project:
 uv add /path/to/benchkit
 ```
 
-## Benchmark File Contract
+## Set Up in a New Project
 
-Benchmark files should export:
+Run `benchkit init` inside any project directory to install the agentic skill:
 
-- one decorated benchmark function, usually as `BENCH`
-- `CASES`, a list of explicit case objects or dicts
+```bash
+cd ~/my-rust-project
+benchkit init
+```
 
-The CLI uses that contract.
+This copies `BENCHKIT.md` (the agent skill file) and adds a reference to your `CLAUDE.md` so that AI agents automatically know how to use benchkit for experiments in that project. The project itself can be in any language.
 
 ## End-to-End Example
 
@@ -43,136 +45,115 @@ import matplotlib.pyplot as plt
 import benchkit as bk
 
 
-@bk.func("routing-quality")
-def routing_quality(circuit: str, backend: str) -> None:
-    bk.context().save_json("case.json", {"circuit": circuit, "backend": backend})
+@bk.func("compile-benchmark")
+def compile_benchmark(compiler: str, opt_level: str, source: str) -> None:
+    """Benchmark a compiler on a source file."""
     result = bk.run(
-        [
-            "python3",
-            "-c",
-            (
-                "import json; "
-                "print(json.dumps({"
-                "'compile_time_ms': 12.5,"
-                "'swap_count': 7,"
-                "'estimated_fidelity': 0.93"
-                "}))"
-            ),
-        ],
-        name="compiler",
+        [compiler, f"-{opt_level}", "-o", "/dev/null", source],
+        name="compile",
+        timeout=120,
     )
-    payload = json.loads(result.stdout)
     bk.context().save_result(
         {
-            "compile_time_ms": float(payload["compile_time_ms"]),
-            "swap_count": int(payload["swap_count"]),
-            "estimated_fidelity": float(payload["estimated_fidelity"]),
+            "compile_time_ms": 12.5,  # parse from result.stdout in practice
+            "binary_size_kb": 340,
+            "returncode": result.returncode,
         }
     )
 
 
-BENCH = routing_quality
 CASES = [
-    {"circuit": "ghz_16", "backend": "cpu"},
-    {"circuit": "ghz_16", "backend": "gpu"},
-    {"circuit": "qaoa_20", "backend": "cpu"},
-    {"circuit": "qaoa_20", "backend": "gpu"},
+    {"compiler": "gcc", "opt_level": "O0", "source": "bench.c"},
+    {"compiler": "gcc", "opt_level": "O3", "source": "bench.c"},
+    {"compiler": "clang", "opt_level": "O0", "source": "bench.c"},
+    {"compiler": "clang", "opt_level": "O3", "source": "bench.c"},
 ]
 
-
-analysis = routing_quality.sweep(cases=CASES, timeout_seconds=60, max_workers=2)
+analysis = compile_benchmark.sweep(cases=CASES)
 df = analysis.load_frame()
 analysis.save_dataframe(df, "raw-results", file_format="csv")
 
+# Access individual run artifacts
 run = analysis.get_run(
-    config={"circuit": "ghz_16", "backend": "cpu"}, rep=1, status="ok"
+    config={"compiler": "gcc", "opt_level": "O0", "source": "bench.c"},
+    status=bk.RunStatus.OK,
 )
-stdout = run.read_text("compiler.stdout.txt")
+stdout = run.read_text("compile.stdout.txt")
 
+# Plot
 with bk.pplot():
     FIGURE_WIDTH_MM = 180.0
     FIGURE_HEIGHT_MM = 45.0
     THEME = {
-        "cpu": {"color": "#4477AA", "marker": "o", "linestyle": "-", "hatch": None},
-        "gpu": {"color": "#EE6677", "marker": "s", "linestyle": "--", "hatch": "//"},
+        "gcc": {"color": "#4477AA", "marker": "o", "hatch": None},
+        "clang": {"color": "#EE6677", "marker": "s", "hatch": "//"},
     }
 
     fig, ax = plt.subplots(figsize=(FIGURE_WIDTH_MM / 25.4, FIGURE_HEIGHT_MM / 25.4))
-    summary = df.groupby("config.backend", as_index=False)[
+    summary = df.groupby("config.compiler", as_index=False)[
         ["result.compile_time_ms"]
     ].mean()
     for _, row in summary.iterrows():
-        style = THEME[row["config.backend"]]
+        style = THEME[row["config.compiler"]]
         ax.bar(
-            row["config.backend"],
+            row["config.compiler"],
             row["result.compile_time_ms"],
             color=style["color"],
             edgecolor="black",
             hatch=style["hatch"],
         )
 
-analysis.save_figure(fig, plot_name="routing-quality-runtime")
+analysis.save_figure(fig, plot_name="compile-times")
+```
+
+To run cases in parallel (e.g. 4 at a time):
+
+```python
+analysis = compile_benchmark.sweep(cases=CASES, max_workers=4)
 ```
 
 For a single case:
 
 ```python
-run = routing_quality(circuit="ghz_16", backend="cpu")
+run = compile_benchmark(compiler="gcc", opt_level="O3", source="bench.c")
 print(run.metrics)
 ```
 
 For later analysis:
 
 ```python
-analysis = bk.open_analysis("routing-quality")
+analysis = bk.open_analysis("compile-benchmark")
 df = analysis.load_frame()
-for run in analysis.load_runs(status="ok"):
+for run in analysis.load_runs(status=bk.RunStatus.OK):
     print(run.config, run.metrics)
 ```
 
 ## CLI
 
-Run the current sweep:
-
-```bash
-benchkit run benchmarks/routing_quality.py
-```
-
-Start a fresh sweep:
-
-```bash
-benchkit run benchmarks/routing_quality.py --new-sweep
-```
-
-List sweeps:
+The CLI is for inspecting stored sweeps and runs, not for running benchmarks.
 
 ```bash
 benchkit sweeps
-benchkit sweeps routing-quality
-```
-
-List runs:
-
-```bash
-benchkit runs routing-quality
-benchkit runs routing-quality --sweep 20260320T153015123456Z
-benchkit runs routing-quality --status ok
+benchkit sweeps compile-benchmark
+benchkit runs compile-benchmark
+benchkit runs compile-benchmark --sweep 20260320T153015123456Z
+benchkit runs compile-benchmark --status ok
 ```
 
 ## Storage Layout
 
-By default, BenchKit writes to the project-local `.benchkit/` directory rooted at the nearest parent containing `pyproject.toml`, `.git`, or `setup.py`.
+By default, BenchKit writes to `.benchkit/` under the nearest project root (containing `pyproject.toml`, `.git`, or `setup.py`).
 
 ```text
 .benchkit/
-  benchmarks.sqlite
-  executions.jsonl
-  runs/<benchmark-id>/<sweep-id>/log.jsonl
-  runs/<benchmark-id>/<sweep-id>/<run-id>/
-  analysis/<benchmark-id>--<sweep-id>/
+  benchmarks.sqlite          # single table, WAL mode
+  runs/<benchmark>/<sweep>/<case>/   # artifact directories
+  analysis/<benchmark>/<sweep>/      # analysis outputs
 ```
 
-Set `BENCHKIT_HOME=/path/to/output-root` to override that location.
+All run metadata (config, metrics, status, environment) lives in the SQLite database. Artifact files (stdout, saved JSON/pickle, etc.) live in the run directories.
+
+Set `BENCHKIT_HOME=/path/to/output-root` to override.
 
 ## Conventions
 
@@ -180,8 +161,7 @@ Set `BENCHKIT_HOME=/path/to/output-root` to override that location.
 - Inside the benchmark function, call `bk.context().save_result({...})` once for the canonical final metric row.
 - Use `bk.context().append_result({...})` for repeated internal samples.
 - Save anything needed later that is not a primary metric as an artifact.
-- Prefer `bk.run(...)` for external commands.
+- Prefer `bk.run(...)` for external commands -- it works with any executable.
 - `bk.open_analysis("benchmark-id")` opens the current sweep by default.
-- Use `max_workers=1` for timing-sensitive benchmarks unless parallelism is clearly safe.
-- Plot scripts should use `180 mm` width for double-column figures and `80 mm` for single-column figures, with a slim height chosen explicitly.
-- Every plotting script should define an explicit theme mapping for colors, markers, line styles, and hatches when relevant.
+- Run benchmarks from Python, not via the CLI.
+- Treat paths below `.benchkit/` as library-owned.

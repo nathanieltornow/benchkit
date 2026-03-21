@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -10,10 +9,7 @@ import matplotlib.pyplot as plt
 import pytest
 
 import benchkit as bk
-from benchkit.artifacts import ArtifactIndex
 from benchkit.config import benchkit_home
-from benchkit.registry import BenchmarkRegistry
-from benchkit.state import SweepState, case_key
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,12 +30,12 @@ def test_benchkit_home_defaults_to_project_local_directory(tmp_path: Path, monke
 def test_decorated_sweep_binds_analysis_tables_and_figures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
-    @bk.func("routing-quality")
-    def routing_quality(size: int) -> None:
-        bk.context().save_json("summary.json", {"compile_time_ms": float(size), "estimated_fidelity": 0.9})
-        bk.context().save_result({"compile_time_ms": float(size), "estimated_fidelity": 0.9})
+    @bk.func("build-perf")
+    def build_perf(size: int) -> None:
+        bk.context().save_json("summary.json", {"compile_time_ms": float(size), "throughput": 0.9})
+        bk.context().save_result({"compile_time_ms": float(size), "throughput": 0.9})
 
-    analysis = routing_quality.sweep(cases=[{"size": 8}, {"size": 16}], max_workers=1, show_progress=False)
+    analysis = build_perf.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
     frame = analysis.load_frame()
     table_path = analysis.save_dataframe(frame, "results")
 
@@ -48,10 +44,10 @@ def test_decorated_sweep_binds_analysis_tables_and_figures(tmp_path: Path, monke
         summary_df = frame.groupby("config.size", as_index=False)[["result.compile_time_ms"]].mean()
         ax.plot(summary_df["config.size"], summary_df["result.compile_time_ms"], marker="o")
 
-    figure_paths = analysis.save_figure(fig, plot_name="routing-quality")
+    figure_paths = analysis.save_figure(fig, plot_name="build-perf")
     plt.close(fig)
 
-    assert table_path == analysis.paths.data_dir / "results.parquet"
+    assert table_path == analysis._data_dir / "results.parquet"
     assert table_path.exists()
     assert len(figure_paths) == 2
     assert all(path.exists() for path in figure_paths)
@@ -69,8 +65,8 @@ def test_single_call_uses_current_sweep_by_default(tmp_path: Path, monkeypatch: 
 
     assert first.sweep_id == second.sweep_id
     analysis = bk.open_analysis("single-case")
-    assert analysis.get_run(config={"size": 8}, rep=1, status="ok").metrics == {"compile_time_ms": 8.0}
-    assert analysis.get_run(config={"size": 16}, rep=1, status="ok").metrics == {"compile_time_ms": 16.0}
+    assert analysis.get_run(config={"size": 8}, status=bk.RunStatus.OK).metrics == {"compile_time_ms": 8.0}
+    assert analysis.get_run(config={"size": 16}, status=bk.RunStatus.OK).metrics == {"compile_time_ms": 16.0}
 
 
 def test_save_result_overwrites_and_append_result_keeps_samples(
@@ -129,41 +125,10 @@ def test_open_analysis_supports_reopening_without_function_definition(
 
     analysis = bk.open_analysis("reopen-study")
     frame = analysis.load_frame()
-    run = analysis.get_run(config={"size": 8}, rep=1, status="ok")
+    run = analysis.get_run(config={"size": 8}, status=bk.RunStatus.OK)
 
     assert frame.loc[0, "result.compile_time_ms"] == pytest.approx(8.0)
     assert run.load_json("trace.json") == {"size": 8}
-
-
-def test_open_analysis_repairs_state_and_artifact_caches_from_log(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
-
-    @bk.func("repair-study")
-    def repair_study(size: int) -> None:
-        bk.context().save_pickle("metrics.pkl", {"size": size})
-        bk.context().save_result({"compile_time_ms": float(size)})
-
-    run = repair_study(size=8)
-    sweep_id = run.sweep_id
-    log_path = tmp_path / "home" / "runs" / "repair-study" / sweep_id / "log.jsonl"
-    state_path = tmp_path / "home" / "benchmarks.sqlite"
-
-    ArtifactIndex().clear_sweep(sweep_id)
-    SweepState(state_path).clear_cases(benchmark_name=f"repair-study--{sweep_id}", log_path=str(log_path))
-
-    analysis = bk.open_analysis("repair-study", sweep=sweep_id)
-    artifacts = bk.list_artifacts(sweep_id, config={"size": 8}, rep=1, name="metrics.pkl")
-
-    assert len(artifacts) == 1
-    assert SweepState(state_path).completed_keys(
-        benchmark_name=f"repair-study--{sweep_id}",
-        log_path=str(log_path),
-    ) == {
-        case_key(benchmark_name=f"repair-study--{sweep_id}", config={"size": 8}, rep=1),
-    }
-    assert analysis.get_run(config={"size": 8}, rep=1, status="ok").load_pickle("metrics.pkl") == {"size": 8}
 
 
 def test_analysis_is_iterable_over_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,10 +138,10 @@ def test_analysis_is_iterable_over_runs(tmp_path: Path, monkeypatch: pytest.Monk
     def iter_analysis(size: int) -> None:
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    iter_analysis.sweep(cases=[{"size": 8}, {"size": 16}], max_workers=1, show_progress=False)
+    iter_analysis.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
     analysis = bk.open_analysis("iter-analysis")
 
-    sizes = sorted(run.config["size"] for run in analysis if run.status == "ok")
+    sizes = sorted(run.config["size"] for run in analysis if run.status is bk.RunStatus.OK)
     assert sizes == [8, 16]
 
 
@@ -195,14 +160,13 @@ def test_explicit_case_objects_are_supported(tmp_path: Path, monkeypatch: pytest
 
     analysis = case_object_benchmark.sweep(
         cases=[Case(size=8, backend="cpu"), Case(size=16, backend="gpu")],
-        max_workers=1,
         show_progress=False,
     )
 
-    assert analysis.get_run(config={"size": 8, "backend": "cpu"}, rep=1, status="ok").metrics == {
+    assert analysis.get_run(config={"size": 8, "backend": "cpu"}, status=bk.RunStatus.OK).metrics == {
         "compile_time_ms": 8.0
     }
-    assert analysis.get_run(config={"size": 16, "backend": "gpu"}, rep=1, status="ok").metrics == {
+    assert analysis.get_run(config={"size": 16, "backend": "gpu"}, status=bk.RunStatus.OK).metrics == {
         "compile_time_ms": 16.0
     }
 
@@ -215,8 +179,8 @@ def test_run_folders_are_nested_by_benchmark_and_sweep(tmp_path: Path, monkeypat
         bk.context().save_json("raw.json", {"size": size})
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    analysis = nested_layout.sweep(cases=[{"size": 8}], sweep="sweep-a", max_workers=1, show_progress=False)
-    run = analysis.get_run(config={"size": 8}, rep=1, status="ok")
+    analysis = nested_layout.sweep(cases=[{"size": 8}], sweep="sweep-a", show_progress=False)
+    run = analysis.get_run(config={"size": 8}, status=bk.RunStatus.OK)
 
     relative = run.artifact_dir.relative_to(tmp_path / "home")
     assert relative.parts[:3] == ("runs", "nested-layout", "sweep-a")
@@ -232,43 +196,76 @@ def test_completed_cases_are_skipped_in_same_sweep(tmp_path: Path, monkeypatch: 
         bk.context().save_json("raw.json", {"size": size})
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], max_workers=1, show_progress=False)
-    resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], max_workers=1, show_progress=False)
+    resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
+    resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
 
     assert calls["count"] == 2
 
 
-def test_open_analysis_defaults_to_current_or_latest_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_analysis_defaults_to_latest_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
     @bk.func("default-sweep-benchmark")
     def default_sweep_benchmark(size: int) -> None:
+        bk.context().save_result({"compile_time_ms": float(size)})
+
+    default_sweep_benchmark.sweep(cases=[{"size": 8}], sweep="sweep-a", show_progress=False)
+    default_sweep_benchmark.sweep(cases=[{"size": 16}], sweep="sweep-b", show_progress=False, new_sweep=True)
+
+    analysis = bk.open_analysis("default-sweep-benchmark")
+    assert analysis.sweep == "sweep-b"
+    assert analysis.get_run(config={"size": 16}, status=bk.RunStatus.OK).metrics == {"compile_time_ms": 16.0}
+
+
+def test_failed_runs_expose_error_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
+
+    @bk.func("failing-benchmark")
+    def failing_benchmark(size: int) -> None:
+        if size == 8:
+            msg = "boom"
+            raise RuntimeError(msg)
+        bk.context().save_result({"compile_time_ms": float(size)})
+
+    analysis = failing_benchmark.sweep(cases=[{"size": 8}], show_progress=False)
+    run = analysis.get_run(config={"size": 8}, status=bk.RunStatus.FAILURE)
+
+    assert run.error_type == "RuntimeError"
+    assert run.error_message == "boom"
+
+
+def test_parallel_sweep_produces_same_results_as_sequential(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
+
+    @bk.func("parallel-benchmark")
+    def parallel_benchmark(size: int) -> None:
         bk.context().save_json("raw.json", {"size": size})
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    registry = BenchmarkRegistry()
-    sweep_a = registry.create_sweep(benchmark_id="default-sweep-benchmark", source_path="/tmp/a.py")
-    default_sweep_benchmark.sweep(cases=[{"size": 8}], sweep=sweep_a, max_workers=1, show_progress=False)
+    analysis = parallel_benchmark.sweep(
+        cases=[{"size": s} for s in range(1, 9)],
+        show_progress=False,
+        max_workers=4,
+    )
 
-    sweep_b = registry.create_sweep(benchmark_id="default-sweep-benchmark", source_path="/tmp/b.py")
-    default_sweep_benchmark.sweep(cases=[{"size": 16}], sweep=sweep_b, max_workers=1, show_progress=False)
+    runs = analysis.load_runs(status=bk.RunStatus.OK)
+    assert len(runs) == 8
+    sizes = sorted(run.config["size"] for run in runs)
+    assert sizes == list(range(1, 9))
+    for run in runs:
+        assert run.metrics == {"compile_time_ms": float(run.config["size"])}
 
-    analysis = bk.open_analysis("default-sweep-benchmark")
-    assert analysis.sweep == sweep_b
-    assert analysis.get_run(config={"size": 16}, rep=1, status="ok").metrics == {"compile_time_ms": 16.0}
 
-
-def test_timeout_marks_case_without_fake_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parallel_sweep_resumes_correctly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
+    calls = {"count": 0}
 
-    @bk.func("timeout-study")
-    def timeout_study(size: int) -> None:
-        time.sleep(0.2)
-        bk.context().save_result({"compile_time_ms": float(size)})
+    @bk.func("parallel-resume")
+    def parallel_resume(size: int) -> None:
+        calls["count"] += 1
+        bk.context().save_result({"value": float(size)})
 
-    analysis = timeout_study.sweep(cases=[{"size": 8}], timeout_seconds=0.05, max_workers=1, show_progress=False)
-    frame = analysis.load_frame()
+    parallel_resume.sweep(cases=[{"size": 1}, {"size": 2}], show_progress=False, max_workers=2)
+    parallel_resume.sweep(cases=[{"size": 1}, {"size": 2}, {"size": 3}], show_progress=False, max_workers=2)
 
-    assert frame.loc[0, "status"] == "timeout"
-    assert frame.loc[0, "attempt"] == 1
-    assert frame["result"].isna().all()
+    assert calls["count"] == 3

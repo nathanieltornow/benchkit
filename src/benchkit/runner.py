@@ -1,750 +1,247 @@
-"""Explicit benchmark sweep runner."""
+"""Benchmark sweep runner with process-based parallelism."""
 
 from __future__ import annotations
 
 import datetime as dt
-import multiprocessing as mp
-import queue
-import time
-from contextlib import contextmanager, suppress
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+import pickle  # noqa: S403
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-import cloudpickle  # type: ignore[import-not-found]
-from rich.box import ROUNDED
-from rich.console import Console
-from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-)
-from rich.table import Table
-from rich.text import Text
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from .artifacts import ArtifactIndex, RunContext, activated_context
-from .state import SweepState, case_key
-from .store import BenchkitStore
+from .logging import RunStatus, capture_env
+from .runtime import RunContext, activated_context
+from .store import BenchkitStore, case_key, default_store
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
-    from multiprocessing.context import SpawnContext, SpawnProcess
-    from multiprocessing.queues import Queue
-    from pathlib import Path
-
-R = TypeVar("R")
-console = Console()
 
 
 @dataclass(frozen=True, slots=True)
 class _Case:
-    rep: int
+    """Normalized benchmark case metadata."""
+
     config: dict[str, Any]
-    log_config: dict[str, Any]
     case_key: str
 
 
 @dataclass(frozen=True, slots=True)
 class _CaseResult:
-    result: Any
-    outcome: dict[str, Any]
-    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    """Result from one executed benchmark case."""
+
+    status: RunStatus
+    metrics: dict[str, Any]
+    error: Exception | None
 
 
-@dataclass(slots=True)
-class _ActiveCase:
-    worker_id: int
-    index: int
-    case: _Case
-    attempt: int
-    started_at: float
-
-
-@dataclass(slots=True)
-class _WorkerState:
-    worker_id: int
-    proc: SpawnProcess
-    job_queue: Queue[Any]
-
-
-@dataclass(frozen=True, slots=True)
-class _Job:
-    case: _Case
-    index: int
-    attempt: int
-
-
-def _run_case_once(
+def _run_case_in_worker(
     fn: Callable[..., Any],
-    case: _Case,
+    case_config: dict[str, Any],
+    case_key_value: str,
     *,
-    sweep_id: str,
-    benchmark_id: str,
-    sweep: str | None,
-) -> tuple[Any, list[dict[str, Any]], None] | tuple[None, list[dict[str, Any]], Exception]:
+    benchmark: str,
+    sweep: str,
+    artifact_dir: str,
+    db_path: str,
+) -> _CaseResult:
+    """Execute one benchmark case. Designed to run in a worker process.
+
+    Each worker opens its own SQLite connection via WAL mode.
+
+    Returns:
+        _CaseResult: The result of the case execution.
+
+    Raises:
+        ValueError: If the benchmark case did not produce metrics.
+    """
     ctx = RunContext(
-        sweep_id=sweep_id,
-        benchmark_id=benchmark_id,
-        sweep=sweep,
-        case_key=case.case_key,
-        rep=case.rep,
+        sweep_id=sweep,
+        case_key=case_key_value,
+        benchmark_id=benchmark,
+        artifact_dir_path=Path(artifact_dir),
+        config=dict(case_config),
     )
+
     try:
         with activated_context(ctx):
-            result = fn(**case.config)
+            returned = fn(**case_config)
     except Exception as exc:  # noqa: BLE001
-        return None, ctx.records, exc
-    return result, ctx.records, None
-
-
-def _pool_worker_entry(
-    fn_bytes: bytes,
-    sweep_id: str,
-    benchmark_id: str,
-    sweep: str | None,
-    worker_id: int,
-    job_queue: Queue[Any],
-    result_queue: Queue[Any],
-) -> None:
-    fn: Callable[..., Any] = cloudpickle.loads(fn_bytes)
-    while True:
-        job = job_queue.get()
-        if job == "STOP":
-            return
-        assert isinstance(job, _Job)
-        result_queue.put(("started", worker_id, job.index, job.attempt))
-        result, artifacts, exc = _run_case_once(
-            fn,
-            job.case,
-            sweep_id=sweep_id,
-            benchmark_id=benchmark_id,
+        store = BenchkitStore(path=Path(db_path))
+        store.insert_run(
+            benchmark=benchmark,
             sweep=sweep,
+            case_key=case_key_value,
+            status=RunStatus.FAILURE.value,
+            config=case_config,
+            metrics={},
+            artifact_dir=artifact_dir,
+            error={"type": type(exc).__name__, "message": str(exc)},
+            env=capture_env(),
         )
-        if exc is not None:
-            result_queue.put(("result", worker_id, job.index, job.attempt, False, exc, artifacts))
-            continue
-        result_queue.put(("result", worker_id, job.index, job.attempt, True, result, artifacts))
+        return _CaseResult(status=RunStatus.FAILURE, metrics={}, error=exc)
+
+    if ctx.result_row:
+        metrics = dict(ctx.result_row)
+    elif isinstance(returned, dict):
+        metrics = dict(returned)
+    else:
+        msg = "Benchmark case did not produce metrics. Use bk.context().save_result(...) or return a dict."
+        raise ValueError(msg)
+
+    store = BenchkitStore(path=Path(db_path))
+    store.insert_run(
+        benchmark=benchmark,
+        sweep=sweep,
+        case_key=case_key_value,
+        status=RunStatus.OK.value,
+        config=case_config,
+        metrics=metrics,
+        artifact_dir=artifact_dir,
+        env=capture_env(),
+    )
+    return _CaseResult(status=RunStatus.OK, metrics=metrics, error=None)
 
 
 @dataclass(slots=True)
 class SweepRunner:
-    """Run one explicit list of benchmark cases."""
+    """Run benchmark cases sequentially or in parallel with ProcessPoolExecutor."""
 
     id: str
     fn: Callable[..., Any]
-    cases: Sequence[Mapping[str, Any]] = field(default_factory=list)
-    benchmark_id: str | None = None
-    sweep: str | None = None
-    log_path: Path | str | None = None
-    timeout_seconds: float | None = None
-    continue_on_failure: bool = True
-    max_workers: int = 1
+    cases: Sequence[Mapping[str, Any]]
     show_progress: bool = True
+    max_workers: int = 1
+    continue_on_failure: bool = True
+    sweep: str | None = None
 
-    def __post_init__(self) -> None:
-        """Validate the sweep configuration.
-
-        Raises:
-            ValueError: If ``max_workers`` is smaller than 1 or if ``timeout_seconds`` is not positive.
-        """
-        if not self.id.strip():
-            msg = "id must not be empty"
-            raise ValueError(msg)
-        if self.max_workers < 1:
-            msg = "max_workers must be at least 1"
-            raise ValueError(msg)
-        if self.timeout_seconds is not None and self.timeout_seconds <= 0:
-            msg = "timeout_seconds must be > 0"
-            raise ValueError(msg)
-        if self.log_path is None:
-            if self.sweep is not None and self.benchmark_id is not None:
-                self.log_path = BenchkitStore().log_path(
-                    benchmark_id=str(self.benchmark_id),
-                    sweep_id=self.sweep,
-                )
-            else:
-                self.log_path = f"{self.id}.jsonl"
-        if self.benchmark_id is None:
-            self.benchmark_id = self.id
-
-    def run(self) -> list[R]:
-        """Execute the benchmark function over all parameter combinations.
+    def run(self) -> str:
+        """Execute all pending cases and return the sweep ID used.
 
         Returns:
-            list[R]: Results in execution order.
+            str: The sweep identifier.
         """
-        init_time = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        store = BenchkitStore()
-        benchmark_name = self.id
-        fn_name = self.fn.__name__
-        all_cases = list(self._cases(benchmark_name))
-        state = SweepState()
-        log_path = str(store.log_path(cast("str | Path", self.log_path)))
-        existing_log_rows = store.count_log_rows(log_path)
-        completed_keys = state.completed_keys(benchmark_name=benchmark_name, log_path=log_path)
-        cases = [case for case in all_cases if case.case_key not in completed_keys]
-        skipped_count = len(all_cases) - len(cases)
-        self._print_start(
-            benchmark_name,
-            len(cases),
-            skipped_count,
-            self.id,
-            existing_log_rows,
-        )
+        sweep_id = self.sweep or _generate_sweep_id()
+        store = default_store()
+        all_cases = list(self._iter_cases())
+        completed = store.completed_keys(benchmark=self.id, sweep=sweep_id)
+        pending = [c for c in all_cases if c.case_key not in completed]
 
-        if self.max_workers == 1 and self.timeout_seconds is None:
-            results, _outcomes, _recent_cases = self._run_sequential(
-                cases,
-                cast("Callable[..., R]", self.fn),
-                benchmark_name,
-                self.id,
-                fn_name,
-                init_time,
-                state,
-                log_path,
-            )
+        if not pending:
+            return sweep_id
+
+        if self.max_workers > 1 and len(pending) > 1:
+            self._run_parallel(pending, sweep_id=sweep_id, store=store)
         else:
-            results, _outcomes, _recent_cases = self._run_managed(
-                cases,
-                cast("Callable[..., R]", self.fn),
-                benchmark_name,
-                self.id,
-                fn_name,
-                init_time,
-                state,
-                log_path,
-            )
+            self._run_sequential(pending, sweep_id=sweep_id, store=store)
 
-        return results
+        return sweep_id
 
     def _run_sequential(
         self,
         cases: list[_Case],
-        fn: Callable[..., R],
-        benchmark_name: str,
+        *,
         sweep_id: str,
-        func_name: str,
-        init_time: str,
-        state: SweepState,
-        log_path: str,
-    ) -> tuple[list[R], list[dict[str, Any]], list[tuple[_Case, _CaseResult]]]:
-        results: list[R] = []
-        outcomes: list[dict[str, Any]] = []
-        counts = self._initial_counts()
-
-        with self._live_dashboard() as progress:
-            task_id = self._add_task(progress, benchmark_name, len(cases), counts)
+        store: BenchkitStore,
+    ) -> None:
+        progress_cm = self._progress(len(cases))
+        with progress_cm as progress:
+            task_id = progress.add_task(f"[cyan]{self.id}", total=len(cases)) if progress is not None else None
             for case in cases:
-                result, artifacts, exc = _run_case_once(
-                    fn,
-                    case,
-                    sweep_id=sweep_id,
-                    benchmark_id=str(self.benchmark_id),
-                    sweep=self.sweep,
-                )
-                if exc is None:
-                    case_result = _CaseResult(
-                        result=result,
-                        outcome={"status": "ok", "attempt": 1},
-                        artifacts=artifacts,
+                art_dir = str(
+                    store.artifact_dir_for(
+                        benchmark=self.id,
+                        sweep=sweep_id,
+                        case_key=case.case_key,
                     )
-                elif not self.continue_on_failure:
-                    raise exc
-                else:
-                    case_result = _CaseResult(
-                        result=None,
-                        outcome={
-                            "status": "failure",
-                            "attempt": 1,
-                            "error_type": type(exc).__name__,
-                            "error_message": str(exc),
-                        },
-                        artifacts=artifacts,
-                    )
-                results.append(cast("R", case_result.result))
-                outcomes.append(case_result.outcome)
-                self._update_counts(counts, case_result)
-                self._log_case(
-                    case,
-                    case_result,
-                    benchmark_name,
-                    sweep_id,
-                    func_name,
-                    init_time,
-                    state,
-                    log_path,
                 )
-                self._advance(progress, task_id, counts)
+                result = _run_case_in_worker(
+                    self.fn,
+                    case.config,
+                    case.case_key,
+                    benchmark=self.id,
+                    sweep=sweep_id,
+                    artifact_dir=art_dir,
+                    db_path=str(store.path),
+                )
+                if result.error is not None and not self.continue_on_failure:
+                    raise result.error
+                if progress is not None and task_id is not None:
+                    progress.advance(task_id)
 
-        return results, outcomes, []
-
-    def _run_managed(
+    def _run_parallel(
         self,
         cases: list[_Case],
-        fn: Callable[..., R],
-        benchmark_name: str,
-        sweep_id: str,
-        func_name: str,
-        init_time: str,
-        state: SweepState,
-        log_path: str,
-    ) -> tuple[list[R], list[dict[str, Any]], list[Any]]:
-        fn_bytes = cloudpickle.dumps(fn)
-        ctx: SpawnContext = mp.get_context("spawn")
-        result_queue: Queue[Any] = ctx.Queue()
-        results_by_index: dict[int, R] = {}
-        outcomes_by_index: dict[int, dict[str, Any]] = {}
-        counts = self._initial_counts()
-        active_by_worker: dict[int, _ActiveCase] = {}
-        attempts_by_index: dict[int, int] = {}
-        pending = list(enumerate(cases))
-        idle_workers: list[int] = []
-        workers = self._start_worker_pool(
-            ctx,
-            fn_bytes,
-            sweep_id,
-            str(self.benchmark_id),
-            self.sweep,
-            result_queue,
-        )
-        worker_map = {worker.worker_id: worker for worker in workers}
-        idle_workers = [worker.worker_id for worker in workers]
-
-        with self._live_dashboard() as progress:
-            task_id = self._add_task(progress, benchmark_name, len(cases), counts)
-            while pending or active_by_worker or len(idle_workers) < len(workers):
-                while pending and idle_workers:
-                    index, case = pending.pop(0)
-                    worker_id = idle_workers.pop(0)
-                    attempt = attempts_by_index.get(index, 0) + 1
-                    attempts_by_index[index] = attempt
-                    worker_map[worker_id].job_queue.put(_Job(case=case, index=index, attempt=attempt))
-
-                try:
-                    message = result_queue.get(timeout=0.05)
-                    event = message[0]
-                    if event == "started":
-                        _, worker_id, index, attempt = message
-                        active_by_worker[worker_id] = _ActiveCase(
-                            worker_id=worker_id,
-                            index=index,
-                            case=cases[index],
-                            attempt=attempt,
-                            started_at=time.monotonic(),
-                        )
-                        continue
-                    _, worker_id, index, attempt, success, payload, artifacts = message
-                    active_case = active_by_worker.get(worker_id)
-                    if active_case is None or active_case.index != index or active_case.attempt != attempt:
-                        continue
-                    active_by_worker.pop(worker_id, None)
-                    idle_workers.append(worker_id)
-                    case_result = self._finalize_result(
-                        success=success,
-                        payload=payload,
-                        attempt=attempt,
-                        artifacts=artifacts,
-                    )
-                    case = active_case.case
-                    results_by_index[index] = cast("R", case_result.result)
-                    outcomes_by_index[index] = case_result.outcome
-                    self._update_counts(counts, case_result)
-                    self._log_case(
-                        case,
-                        case_result,
-                        benchmark_name,
-                        sweep_id,
-                        func_name,
-                        init_time,
-                        state,
-                        log_path,
-                    )
-                    self._advance(progress, task_id, counts)
-                except queue.Empty:
-                    pass
-
-                self._check_timeouts(
-                    active_by_worker,
-                    results_by_index,
-                    outcomes_by_index,
-                    counts,
-                    benchmark_name,
-                    sweep_id,
-                    func_name,
-                    init_time,
-                    state,
-                    log_path,
-                    progress,
-                    task_id,
-                    ctx,
-                    fn_bytes,
-                    str(self.benchmark_id),
-                    self.sweep,
-                    sweep_id,
-                    result_queue,
-                    worker_map,
-                    idle_workers,
-                )
-
-        self._stop_worker_pool(workers)
-
-        return (
-            [results_by_index[index] for index in range(len(cases))],
-            [outcomes_by_index[index] for index in range(len(cases))],
-            [],
-        )
-
-    def _log_case(
-        self,
-        case: _Case,
-        case_result: _CaseResult,
-        benchmark_name: str,
-        sweep_id: str,
-        func_name: str,
-        init_time: str,
-        state: SweepState,
-        log_path: str,
-    ) -> None:
-        updated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        attempt = int(case_result.outcome.get("attempt", 1))
-        BenchkitStore().append_log_entry(
-            log_path=cast("str | Path", self.log_path),
-            config=case.log_config,
-            result=case_result.result,
-            func_name=func_name,
-            init_time=init_time,
-            extra={
-                "benchmark": str(self.benchmark_id),
-                "storage_id": benchmark_name,
-                "sweep_id": self.sweep or sweep_id,
-                "case_key": case.case_key,
-                "rep": case.rep,
-                "rep_count": 1,
-                "execution_mode": "parallel" if self.max_workers > 1 else "sequential",
-                "max_workers": self.max_workers,
-                "artifacts": case_result.artifacts,
-                **case_result.outcome,
-            },
-        )
-        ArtifactIndex().record_many(
-            sweep_id=sweep_id,
-            case_key=case.case_key,
-            rep=case.rep,
-            attempt=attempt,
-            config=case.log_config,
-            artifacts=case_result.artifacts,
-        )
-        state.record_case(
-            case_key=case.case_key,
-            benchmark_name=benchmark_name,
-            rep=case.rep,
-            status=str(case_result.outcome.get("status", "ok")),
-            config=case.log_config,
-            log_path=log_path,
-            updated_at=updated_at,
-        )
-
-    def _start_worker_pool(
-        self,
-        ctx: SpawnContext,
-        fn_bytes: bytes,
-        sweep_id: str,
-        benchmark_id: str,
-        sweep: str | None,
-        result_queue: Queue[Any],
-    ) -> list[_WorkerState]:
-        workers: list[_WorkerState] = []
-        for worker_id in range(self.max_workers):
-            job_queue: Queue[Any] = ctx.Queue()
-            proc = ctx.Process(
-                target=_pool_worker_entry,
-                args=(fn_bytes, sweep_id, benchmark_id, sweep, worker_id, job_queue, result_queue),
-            )
-            proc.start()
-            workers.append(_WorkerState(worker_id=worker_id, proc=proc, job_queue=job_queue))
-        return workers
-
-    @staticmethod
-    def _stop_worker_pool(workers: list[_WorkerState]) -> None:
-        for worker in workers:
-            with suppress(Exception):
-                worker.job_queue.put("STOP")
-        for worker in workers:
-            worker.proc.join(timeout=1)
-            if worker.proc.is_alive():
-                worker.proc.terminate()
-                worker.proc.join()
-
-    def _finalize_result(
-        self,
         *,
-        success: bool,
-        payload: Any,  # noqa: ANN401
-        attempt: int,
-        artifacts: list[dict[str, Any]],
-    ) -> _CaseResult:
-        if success:
-            return _CaseResult(
-                result=payload,
-                outcome={"status": "ok", "attempt": attempt},
-                artifacts=artifacts,
-            )
-
-        if not self.continue_on_failure:
-            raise payload
-
-        return _CaseResult(
-            result=None,
-            outcome={
-                "status": "failure",
-                "attempt": attempt,
-                "error_type": type(payload).__name__,
-                "error_message": str(payload),
-            },
-            artifacts=artifacts,
-        )
-
-    def _check_timeouts(
-        self,
-        active: dict[int, _ActiveCase],
-        results_by_index: dict[int, R],
-        outcomes_by_index: dict[int, dict[str, Any]],
-        counts: dict[str, int],
-        benchmark_name: str,
         sweep_id: str,
-        func_name: str,
-        init_time: str,
-        state: SweepState,
-        log_path: str,
-        progress: Progress | None,
-        task_id: int | None,
-        ctx: SpawnContext,
-        fn_bytes: bytes,
-        worker_benchmark_id: str,
-        worker_sweep: str | None,
-        worker_sweep_id: str,
-        result_queue: Queue[Any],
-        worker_map: dict[int, _WorkerState],
-        idle_workers: list[int],
+        store: BenchkitStore,
     ) -> None:
-        if self.timeout_seconds is None:
-            return
+        # Use ProcessPoolExecutor for real parallelism. Fall back to
+        # ThreadPoolExecutor if the benchmark function can't be pickled
+        # (e.g. lambdas, closures, or functions defined inside other functions).
+        try:
+            pickle.dumps(self.fn)
+            pool_class = ProcessPoolExecutor
+        except (pickle.PicklingError, AttributeError, TypeError):
+            pool_class = ThreadPoolExecutor  # type: ignore[assignment]
 
-        now = time.monotonic()
-        timed_out = [
-            (worker_id, active_case)
-            for worker_id, active_case in list(active.items())
-            if (now - active_case.started_at) > self.timeout_seconds
-        ]
+        progress_cm = self._progress(len(cases))
+        with progress_cm as progress:
+            label = f"[cyan]{self.id} ({self.max_workers}w)"
+            task_id = progress.add_task(label, total=len(cases)) if progress is not None else None
 
-        for worker_id, active_case in timed_out:
-            worker = worker_map[worker_id]
-            worker.proc.terminate()
-            worker.proc.join()
-            active.pop(worker_id, None)
-            replacement_queue: Queue[Any] = ctx.Queue()
-            replacement = ctx.Process(
-                target=_pool_worker_entry,
-                args=(
-                    fn_bytes,
-                    worker_sweep_id,
-                    worker_benchmark_id,
-                    worker_sweep,
-                    worker_id,
-                    replacement_queue,
-                    result_queue,
-                ),
-            )
-            replacement.start()
-            worker_map[worker_id] = _WorkerState(worker_id=worker_id, proc=replacement, job_queue=replacement_queue)
-            idle_workers.append(worker_id)
+            with pool_class(max_workers=self.max_workers) as pool:
+                futures = {}
+                for case in cases:
+                    art_dir = str(
+                        store.artifact_dir_for(
+                            benchmark=self.id,
+                            sweep=sweep_id,
+                            case_key=case.case_key,
+                        )
+                    )
+                    future = pool.submit(
+                        _run_case_in_worker,
+                        self.fn,
+                        case.config,
+                        case.case_key,
+                        benchmark=self.id,
+                        sweep=sweep_id,
+                        artifact_dir=art_dir,
+                        db_path=str(store.path),
+                    )
+                    futures[future] = case
 
-            if not self.continue_on_failure:
-                msg = f"Benchmark timed out after {self.timeout_seconds} seconds"
-                raise TimeoutError(msg)
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result.error is not None and not self.continue_on_failure:
+                        pool.shutdown(wait=False, cancel_futures=True)
+                        raise result.error
+                    if progress is not None and task_id is not None:
+                        progress.advance(task_id)
 
-            case_result = _CaseResult(
-                result=None,
-                outcome={
-                    "status": "timeout",
-                    "attempt": active_case.attempt,
-                    "error_type": "TimeoutError",
-                    "error_message": f"Benchmark timed out after {self.timeout_seconds} seconds",
-                },
-                artifacts=[],
-            )
-            results_by_index[active_case.index] = cast("R", case_result.result)
-            outcomes_by_index[active_case.index] = case_result.outcome
-            self._update_counts(counts, case_result)
-            self._log_case(
-                active_case.case,
-                case_result,
-                benchmark_name,
-                sweep_id,
-                func_name,
-                init_time,
-                state,
-                log_path,
-            )
-            self._advance(progress, task_id, counts)
-
-    def _print_start(
-        self,
-        benchmark_name: str,
-        total_cases: int,
-        skipped_count: int,
-        sweep_id: str,
-        existing_log_rows: int,
-    ) -> None:
-        if not self.show_progress:
-            return
-        log_path = BenchkitStore().log_path(cast("str | Path", self.log_path))
-        mode = "parallel" if self.max_workers > 1 else "sequential"
-        table = Table.grid(expand=True)
-        table.add_column(ratio=1)
-        table.add_column(justify="right")
-        title = Text.assemble(
-            ("sweep", "bold cyan"),
-            ("  ", ""),
-            (benchmark_name, "bold"),
-        )
-        meta = Text.assemble(
-            (f"id {sweep_id}", "dim"),
-            ("   ", ""),
-            (mode, "magenta"),
-            ("   ", ""),
-            (f"{self.max_workers} workers", "yellow"),
-        )
-        counts = Text.assemble(
-            (f"{total_cases}", "bold"),
-            (" to run", "dim"),
-            ("   ", ""),
-            (f"{skipped_count}", "bold"),
-            (" skipped", "dim"),
-        )
-        paths = Text.assemble(
-            ("log ", "dim"),
-            (str(log_path), "default"),
-            ("   ", ""),
-            (str(existing_log_rows), "bold"),
-            (" existing rows", "dim"),
-        )
-        table.add_row(title, counts)
-        table.add_row(meta, "")
-        table.add_row(paths, "")
-        console.print(
-            Panel(
-                table,
-                box=ROUNDED,
-                border_style="bright_black",
-                padding=(0, 1),
-            )
-        )
-
-    @contextmanager
-    def _live_dashboard(self) -> Any:  # noqa: ANN401
-        if not self.show_progress:
-            yield None
-            return
-        progress = Progress(
-            SpinnerColumn(style="bright_cyan"),
-            TextColumn("[bold]{task.description}"),
-            BarColumn(complete_style="cyan", finished_style="green", pulse_style="bright_black"),
-            TaskProgressColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            TextColumn("{task.fields[counts]}", justify="left"),
-            console=console,
-        )
-        with progress:
-            yield progress
-
-    @staticmethod
-    def _add_task(
-        progress: Progress | None,
-        benchmark_name: str,
-        total_cases: int,
-        counts: dict[str, int],
-    ) -> int | None:
-        if progress is None:
-            return None
-        return cast(
-            "int",
-            progress.add_task(
-                f"Running {benchmark_name}",
-                total=total_cases,
-                counts=SweepRunner._counts_text(counts),
-            ),
-        )
-
-    @staticmethod
-    def _advance(
-        progress: Progress | None,
-        task_id: int | None,
-        counts: dict[str, int],
-    ) -> None:
-        if progress is None or task_id is None:
-            return
-        progress.update(
-            task_id,
-            advance=1,
-            counts=SweepRunner._counts_text(counts),
-        )
-
-    @staticmethod
-    def _initial_counts() -> dict[str, int]:
-        return {"ok": 0, "failure": 0, "timeout": 0, "skipped": 0}
-
-    @staticmethod
-    def _update_counts(counts: dict[str, int], case_result: _CaseResult) -> None:
-        status = str(case_result.outcome.get("status", "ok"))
-        counts[status] = counts.get(status, 0) + 1
-
-    @staticmethod
-    def _counts_text(counts: dict[str, int]) -> str:
-        return "  ".join([
-            f"[green]ok {counts.get('ok', 0)}[/green]",
-            f"[red]fail {counts.get('failure', 0)}[/red]",
-            f"[yellow]timeout {counts.get('timeout', 0)}[/yellow]",
-            f"[cyan]skip {counts.get('skipped', 0)}[/cyan]",
-        ])
-
-    @staticmethod
-    def _format_config(config: dict[str, Any], max_len: int = 48) -> str:
-        text = ", ".join(f"{key}={value}" for key, value in config.items())
-        return text if len(text) <= max_len else f"{text[: max_len - 3]}..."
-
-    @staticmethod
-    def _format_result(result: Any, max_len: int = 36) -> str:  # noqa: ANN401
-        text = ", ".join(f"{key}={value}" for key, value in result.items()) if isinstance(result, dict) else str(result)
-        return text if len(text) <= max_len else f"{text[: max_len - 3]}..."
-
-    @staticmethod
-    def _status_markup(status: str) -> str:
-        styles = {
-            "ok": "green",
-            "failure": "red",
-            "timeout": "yellow",
-            "skipped": "cyan",
-        }
-        color = styles.get(status, "white")
-        return f"[{color}]{status}[/{color}]"
-
-    def _cases(self, benchmark_name: str) -> Iterator[_Case]:
+    def _iter_cases(self) -> Iterator[_Case]:
         for config in self.cases:
-            log_config = dict(config)
-            rep = 1
+            normalized = dict(config)
             yield _Case(
-                rep=rep,
-                config=dict(config),
-                log_config=log_config,
-                case_key=case_key(
-                    benchmark_name=benchmark_name,
-                    config=log_config,
-                    rep=rep,
-                ),
+                config=normalized,
+                case_key=case_key(benchmark_name=self.id, config=normalized),
             )
+
+    def _progress(self, total: int) -> Progress | nullcontext[None]:
+        if not self.show_progress or total == 0:
+            return nullcontext(None)
+        return Progress(
+            SpinnerColumn(),
+            TextColumn(f"[bold]{self.id}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            transient=True,
+        )
+
+
+def _generate_sweep_id() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")

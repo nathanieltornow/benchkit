@@ -8,7 +8,11 @@ from cycler import cycler
 
 
 def colors() -> list[str]:
-    """Return the default color cycle."""
+    """Return the default color cycle.
+
+    Returns:
+        list[str]: Hex color strings.
+    """
     return [
         "#4477AA",
         "#EE6677",
@@ -22,12 +26,20 @@ def colors() -> list[str]:
 
 
 def hatches() -> list[str]:
-    """Return the default hatches."""
+    """Return the default hatches.
+
+    Returns:
+        list[str]: Hatch pattern strings.
+    """
     return ["//", "\\\\", "---", "oo", "..", "xx", "++"]
 
 
 def base_rc_params() -> dict[str, Any]:
-    """Return matplotlib rc parameters for portable publication-style plots."""
+    """Return matplotlib rc parameters for portable publication-style plots.
+
+    Returns:
+        dict[str, Any]: The rc parameter dictionary.
+    """
     font_size = 7
     return {
         "axes.prop_cycle": cycler("color", colors()),

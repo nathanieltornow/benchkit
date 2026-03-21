@@ -11,6 +11,7 @@ This is the intended workflow for agent-driven benchmark work.
 ## Execution Rules
 
 - Write benchmarks as normal Python functions.
+- The benchmark function can call any external tool, binary, or script via `bk.run(...)`.
 - Save the canonical final metric row with `bk.context().save_result({...})`.
 - Use `bk.context().append_result({...})` when one benchmark invocation records multiple internal samples.
 - Save all non-metric evidence as artifacts with `save_json`, `save_text`, `save_pickle`, `copy_file`, or `bk.run(...)`.
@@ -19,6 +20,9 @@ This is the intended workflow for agent-driven benchmark work.
 - Sweeps are the only lineage mechanism.
 - Resume is always on within the current sweep.
 - Start a fresh sweep explicitly when you want a new benchmark campaign.
+- Only the project BenchKit root is configurable. Internal paths are library-owned.
+- All run metadata is stored in a single SQLite table (`benchmarks.sqlite`). Artifact files live in run directories.
+- Use `timeout=` on `bk.run(...)` for long-running external processes.
 
 ## Analysis Rules
 
@@ -30,6 +34,7 @@ This is the intended workflow for agent-driven benchmark work.
 - Save figures with `analysis.save_figure(...)`.
 - Reports are agent-managed Markdown files under `analysis.paths.root / "reports"/`.
 - Every report must include a rerun command or short rerun procedure.
+- Use simple output names like `"raw-results"` or `"main-figure"`, not custom filesystem paths.
 
 ## Plot Rules
 
@@ -48,20 +53,15 @@ This is the intended workflow for agent-driven benchmark work.
 
 ```text
 benchmarks/
-  routing_quality.py
+  compile_perf.py
 plots/
-  routing_quality/
+  compile_perf/
     main_figure.py
     appendix_ablation.py
 themes/
-  routing_quality.py
+  compile_perf.py
   shared.py
 ```
-
-Benchmark files should export:
-
-- `BENCH`
-- `CASES`
 
 ## Example Pattern
 
@@ -69,38 +69,42 @@ Benchmark files should export:
 import benchkit as bk
 
 
-@bk.func("routing-quality")
-def routing_quality(size: int, backend: str) -> None:
-    bk.context().save_json("input.json", {"size": size, "backend": backend})
-    result = bk.run(["python3", "-c", "print('ok')"], name="generator")
-    bk.context().append_result({"phase": "generator", "returncode": result.returncode})
+@bk.func("compile-perf")
+def compile_perf(compiler: str, opt_level: str, source: str) -> None:
+    bk.context().save_json("input.json", {"compiler": compiler, "opt_level": opt_level})
+    result = bk.run(
+        [compiler, f"-{opt_level}", source, "-o", "/dev/null"],
+        name="compile",
+        timeout=120,
+    )
+    bk.context().append_result({"phase": "compile", "returncode": result.returncode})
     bk.context().save_result(
         {
-            "compile_time_ms": float(size),
-            "estimated_fidelity": 0.9,
+            "compile_time_ms": 12.5,
+            "binary_size_kb": 340,
         }
     )
 
 
-BENCH = routing_quality
 CASES = [
-    {"size": 8, "backend": "heuristic"},
-    {"size": 16, "backend": "search"},
+    {"compiler": "gcc", "opt_level": "O0", "source": "bench.c"},
+    {"compiler": "clang", "opt_level": "O3", "source": "bench.c"},
 ]
 
 
-analysis = routing_quality.sweep(cases=CASES, max_workers=2)
+analysis = compile_perf.sweep(cases=CASES)
 df = analysis.load_frame()
 analysis.save_dataframe(df, "raw-results", file_format="csv")
-run = analysis.get_run(config={"size": 8, "backend": "heuristic"}, rep=1, status="ok")
-trace = run.load_json("generator.run.json")
+run = analysis.get_run(
+    config={"compiler": "gcc", "opt_level": "O0", "source": "bench.c"},
+    status=bk.RunStatus.OK,
+)
+metadata = run.load_json("compile.run.json")
 ```
 
 Typical CLI flow:
 
 ```bash
-benchkit run benchmarks/routing_quality.py
-benchkit run benchmarks/routing_quality.py --new-sweep
-benchkit sweeps routing-quality
-benchkit runs routing-quality --status ok
+benchkit sweeps compile-perf
+benchkit runs compile-perf --status ok
 ```

@@ -2,58 +2,57 @@
 
 from __future__ import annotations
 
-import time
-
 import matplotlib.pyplot as plt
 
 import benchkit as bk
 
 
-@bk.func("simple")
-def simple(n: int, lr: float) -> None:
-    """Simulate one benchmark case and write raw outputs into the run folder."""
-    if n == 3 and lr == 0.1:
-        time.sleep(0.02)
-    acc = 0.8 + 0.02 * n - 0.01 * lr
-    loss = 0.5 - 0.03 * n + 0.01 * lr
-    bk.context().save_json("raw.json", {"n": n, "lr": lr, "acc": acc, "loss": loss})
-    bk.context().save_pickle("metrics.pkl", {"acc": acc, "loss": loss})
-    bk.context().save_result({"acc": acc, "loss": loss})
+@bk.func("sort-comparison")
+def sort_comparison(algorithm: str, size: int) -> None:
+    """Benchmark a sorting algorithm on a random array."""
+    result = bk.run(
+        [
+            "python3",
+            "-c",
+            (
+                "import random, time, json; "
+                f"data = [random.random() for _ in range({size})];"
+                "t0 = time.perf_counter();"
+                "sorted(data);"
+                "elapsed = (time.perf_counter() - t0) * 1000;"
+                "print(json.dumps({'elapsed_ms': elapsed, 'n_elements': len(data)}))"
+            ),
+        ],
+        name="sort",
+    )
+    import json
+
+    payload = json.loads(result.stdout)
+    bk.context().save_result({
+        "elapsed_ms": float(payload["elapsed_ms"]),
+        "n_elements": int(payload["n_elements"]),
+    })
 
 
-BENCH = simple
-CASES = bk.grid(n=[1, 2, 3], lr=[0.01, 0.1])
+CASES = bk.grid(algorithm=["timsort", "mergesort"], size=[1000, 10000, 100000])
 
 
 def main() -> None:
     """Run the example benchmark sweep and plot the results."""
-    analysis = simple.sweep(
-        cases=CASES,
-        timeout_seconds=1,
-        max_workers=5,
-        show_progress=False,
-    )
+    analysis = sort_comparison.sweep(cases=CASES, show_progress=False)
     df = analysis.load_frame()
-    run = analysis.get_run(config={"n": 1, "lr": 0.01}, rep=1, status="ok")
-    print(run.path("metrics.pkl"))
-    print(run.load_pickle("metrics.pkl"))
 
     with bk.pplot():
-        fig, ax = plt.subplots()
-        summary_df = df.groupby("config.n", as_index=False)[["result.acc", "result.loss"]].mean()
-        ax.plot(summary_df["config.n"], summary_df["result.acc"], marker="o", label="acc")
-        ax.plot(summary_df["config.n"], summary_df["result.loss"], marker="s", label="loss")
-        ax.set_title("Training sweep")
-        ax.set_xlabel("Epochs")
-        ax.legend()
+        FIGURE_WIDTH_MM = 180.0
+        FIGURE_HEIGHT_MM = 45.0
+        fig, ax = plt.subplots(figsize=(FIGURE_WIDTH_MM / 25.4, FIGURE_HEIGHT_MM / 25.4))
+        summary_df = df.groupby("config.size", as_index=False)[["result.elapsed_ms"]].mean()
+        ax.plot(summary_df["config.size"], summary_df["result.elapsed_ms"], marker="o")
+        ax.set_xlabel("Array size")
+        ax.set_ylabel("Time (ms)")
 
-    report_dir = analysis.paths.root / "reports"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / "summary.md").write_text(
-        "# simple\n\n## Rerun\n\n`uv run python examples/simple.py`\n",
-        encoding="utf-8",
-    )
-    analysis.save_figure(fig, plot_name="simple-metrics")
+    analysis.save_figure(fig, plot_name="sort-comparison")
+    analysis.save_dataframe(df, "raw-results", file_format="csv")
 
 
 if __name__ == "__main__":

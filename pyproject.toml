@@ -32,13 +32,11 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "cloudpickle>=3.1.2",
     "fastparquet>=2024.11.0",
     "gitpython>=3.1.45",
     "matplotlib>=3.9.4",
     "pandas>=2.3.1",
     "pyarrow>=21.0.0",
-    "pydantic>=2.11.7",
     "rich>=14.1.0",
     "typer>=0.16.0",
 ]
@@ -49,6 +47,9 @@ benchkit = "benchkit.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/benchkit"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/benchkit/skill.md" = "benchkit/skill.md"
 
 [tool.hatch.version]
 source = "vcs"
@@ -70,10 +71,7 @@ addopts = ["-ra", "--strict-markers", "--strict-config"]
 xfail_strict = true
 filterwarnings = [
     "error",
-    # Qiskit 1.3 deprecations
-    'ignore:.*``qiskit.dagcircuit.dagcircuit.DAGCircuit.*`` is deprecated as of qiskit 1.3.0.*:DeprecationWarning:',
-    'ignore:.*``qiskit.circuit.instruction.Instruction.*`` is deprecated as of qiskit 1.3.*:DeprecationWarning:',
-    'ignore:.*``qiskit.circuit.library.standard_gates.x.*`` is pending deprecation as of qiskit 1.3.*:PendingDeprecationWarning:',
+    "ignore::ResourceWarning",
 ]
 log_cli_level = "info"
 testpaths = ["test"]
@@ -100,7 +98,7 @@ explicit_package_bases = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["qiskit.*", "matplotlib.*", "git.*", "pandas.*", "rich.*", "typer.*", "cycler.*"]
+module = ["matplotlib.*", "git.*", "pandas.*", "rich.*", "typer.*", "cycler.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
