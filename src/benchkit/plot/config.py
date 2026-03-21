@@ -6,9 +6,19 @@ from typing import Any
 
 from cycler import cycler
 
+# Figure size presets in inches (converted from mm).
+# Width x height tuples matching common paper formats.
+PRESETS: dict[str, tuple[float, float]] = {
+    "double-column": (180.0 / 25.4, 45.0 / 25.4),  # ~7.09 x 1.77 in
+    "double-column-tall": (180.0 / 25.4, 70.0 / 25.4),  # ~7.09 x 2.76 in
+    "single-column": (85.0 / 25.4, 55.0 / 25.4),  # ~3.35 x 2.17 in
+    "single-column-tall": (85.0 / 25.4, 85.0 / 25.4),  # ~3.35 x 3.35 in
+    "slide": (254.0 / 25.4, 142.875 / 25.4),  # 16:9 slide, 10 x 5.625 in
+}
+
 
 def colors() -> list[str]:
-    """Return the default color cycle.
+    """Return the default color cycle (Tol qualitative, colorblind-safe).
 
     Returns:
         list[str]: Hex color strings.
@@ -43,7 +53,6 @@ def base_rc_params() -> dict[str, Any]:
     font_size = 7
     return {
         "axes.prop_cycle": cycler("color", colors()),
-        # Portable defaults; callers can opt into LaTeX through custom_rc.
         "text.usetex": False,
         "font.family": "serif",
         "font.serif": ["DejaVu Serif", "Times New Roman", "Times"],
@@ -56,35 +65,49 @@ def base_rc_params() -> dict[str, Any]:
         "legend.fontsize": font_size,
         "figure.titlesize": font_size + 1,
         # --- Embedding/fonts in vector backends ---
-        "pdf.fonttype": 42,  # TrueType in PDF (note: ignored by usetex in many cases)
+        "pdf.fonttype": 42,
         "ps.fonttype": 42,
-        # --- Lines (nicer look for paper figs) ---
+        # --- Lines ---
         "lines.linewidth": 1.6,
         "lines.markersize": 4.5,
         "lines.solid_capstyle": "round",
         "lines.solid_joinstyle": "round",
-        # --- Axes / grid (helpful for barplots) ---
+        # --- Axes / grid ---
         "axes.grid": True,
         "axes.grid.axis": "y",
         "axes.grid.which": "major",
         "grid.alpha": 0.3,
         "grid.linewidth": 0.6,
-        # --- Bars/Patches (crisp outlines that print well) ---
+        # --- Bars/Patches ---
         "patch.edgecolor": "black",
         "patch.linewidth": 0.7,
         "patch.antialiased": True,
-        # --- Hatching (pattern line thickness & color) ---
+        # --- Hatching ---
         "hatch.linewidth": 0.8,
         "hatch.color": "black",
-        # --- Ticks (cleaner) ---
+        # --- Ticks ---
         "xtick.direction": "out",
         "ytick.direction": "out",
         "xtick.major.size": 3.0,
         "ytick.major.size": 3.0,
         "xtick.major.width": 0.8,
         "ytick.major.width": 0.8,
-        # --- Savefig hygiene ---
+        # --- Savefig ---
         "savefig.bbox": "tight",
         "savefig.pad_inches": 0.02,
         "savefig.dpi": 400,
+    }
+
+
+def latex_rc_params() -> dict[str, Any]:
+    """Return rc overrides for LaTeX text rendering.
+
+    Returns:
+        dict[str, Any]: LaTeX-specific rc parameters.
+    """
+    return {
+        "text.usetex": True,
+        "font.family": "serif",
+        "font.serif": ["Computer Modern Roman"],
+        "mathtext.fontset": "cm",
     }
