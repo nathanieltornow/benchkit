@@ -16,14 +16,17 @@ from .store import default_store
 console = Console()
 app = typer.Typer(help="Inspect BenchKit sweeps and runs.")
 
+# Skills bundled with the package.
+_SKILLS = ["benchkit", "benchkit-plot"]
 
-def _skill_source() -> Path:
-    """Return the path to the bundled SKILL.md shipped with the package.
+
+def _skills_dir() -> Path:
+    """Return the path to the bundled skills directory.
 
     Returns:
-        Path: The skill file path.
+        Path: The skills directory inside the installed package.
     """
-    return Path(str(importlib.resources.files("benchkit") / "SKILL.md"))
+    return Path(str(importlib.resources.files("benchkit") / "skills"))
 
 
 def _format_config(config: dict[str, Any], max_len: int = 48) -> str:
@@ -120,10 +123,10 @@ def runs_list(
 def init(
     target: Annotated[str | None, typer.Argument(help="Target project directory.")] = None,
 ) -> None:
-    """Install the BenchKit skill into a project.
+    """Install all BenchKit skills into a project.
 
-    Creates .claude/skills/benchkit/SKILL.md so Claude Code
-    auto-discovers the benchkit skill in this project.
+    Creates .claude/skills/benchkit/ and .claude/skills/benchkit-plot/
+    so Claude Code auto-discovers both skills in this project.
 
     Raises:
         Exit: If the target directory does not exist.
@@ -133,42 +136,41 @@ def init(
         console.print(f"[red]Directory {target_dir} does not exist.[/red]")
         raise typer.Exit(1)
 
-    _install_skill_to(target_dir / ".claude" / "skills" / "benchkit")
+    for skill_name in _SKILLS:
+        _install_skill(skill_name, target_dir / ".claude" / "skills" / skill_name)
 
 
 @app.command("install-skill")  # type: ignore[misc]  # typer decorator
 def install_skill() -> None:
-    """Install the BenchKit skill globally for Claude Code.
+    """Install all BenchKit skills globally for Claude Code.
 
-    Creates ~/.claude/skills/benchkit/SKILL.md so the skill
-    is available in every Claude Code conversation.
+    Creates ~/.claude/skills/benchkit/ and ~/.claude/skills/benchkit-plot/
+    so both skills are available in every Claude Code conversation.
     """
-    _install_skill_to(Path.home() / ".claude" / "skills" / "benchkit")
+    for skill_name in _SKILLS:
+        _install_skill(skill_name, Path.home() / ".claude" / "skills" / skill_name)
 
 
-def _install_skill_to(skill_dir: Path) -> None:
-    """Copy the bundled SKILL.md into a target skill directory.
+def _install_skill(skill_name: str, dest_dir: Path) -> None:
+    """Copy one bundled skill into a target directory.
 
     Raises:
         Exit: If the bundled skill file is missing.
     """
-    source = _skill_source()
+    source = _skills_dir() / skill_name / "SKILL.md"
     if not source.exists():
-        console.print("[red]Could not find bundled skill file.[/red]")
+        console.print(f"[red]Could not find bundled skill {skill_name!r}.[/red]")
         raise typer.Exit(1)
 
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    dest = skill_dir / "SKILL.md"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / "SKILL.md"
 
-    if dest.exists():
-        existing = dest.read_text(encoding="utf-8")
-        new = source.read_text(encoding="utf-8")
-        if existing == new:
-            console.print(f"[dim]{dest} is already up to date.[/dim]")
-            return
+    if dest.exists() and dest.read_text(encoding="utf-8") == source.read_text(encoding="utf-8"):
+        console.print(f"[dim]{dest} is already up to date.[/dim]")
+        return
 
     shutil.copy2(source, dest)
-    console.print(f"[green]Installed skill to {dest}[/green]")
+    console.print(f"[green]Installed {skill_name} skill to {dest}[/green]")
 
 
 def main() -> None:
