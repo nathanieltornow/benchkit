@@ -5,6 +5,8 @@ description: Create publication-quality plots for academic papers and presentati
 
 # Publication Plotting Skill
 
+This skill requires the `benchkit` library (`pip install benchkit` or `uv add benchkit`).
+
 You create publication-quality figures using `benchkit.pplot()` and matplotlib. Every figure you produce must be camera-ready for an academic paper.
 
 ## Setup

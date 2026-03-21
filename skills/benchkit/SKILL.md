@@ -5,6 +5,12 @@ description: Design, execute, analyze, and plot reproducible benchmark experimen
 
 # BenchKit -- Agentic Experiment Skill
 
+BenchKit (`benchkit`) is a Python library for running reproducible benchmark experiments, capturing artifacts, and analyzing results. It works with any workload -- Python functions, compiled binaries (Rust, C++, etc.), shell scripts, or external tools in any language. The benchmark orchestration is always Python; the workload is anything.
+
+**Install:** `pip install benchkit` or `uv add benchkit`
+
+**Source:** https://github.com/nathanieltornow/benchkit
+
 ## Quick Reference
 
 ```python
