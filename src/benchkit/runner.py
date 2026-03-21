@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import datetime as dt
 import pickle  # noqa: S403
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
@@ -105,6 +106,39 @@ def _run_case_in_worker(
     return _CaseResult(status=RunStatus.OK, metrics=metrics, error=None)
 
 
+def _handle_timeout(
+    case: _Case,
+    *,
+    timeout: float,
+    benchmark: str,
+    sweep: str,
+    artifact_dir: str,
+    db_path: str,
+) -> _CaseResult:
+    """Record a timeout as a failed run in the database.
+
+    Returns:
+        _CaseResult: A failure result with TimeoutError.
+    """
+    store = BenchkitStore(path=Path(db_path))
+    store.insert_run(
+        benchmark=benchmark,
+        sweep=sweep,
+        case_key=case.case_key,
+        status=RunStatus.FAILURE.value,
+        config=case.config,
+        metrics={},
+        artifact_dir=artifact_dir,
+        error={"type": "TimeoutError", "message": f"Case exceeded {timeout}s timeout"},
+        env=capture_env(),
+    )
+    return _CaseResult(
+        status=RunStatus.FAILURE,
+        metrics={},
+        error=TimeoutError(f"Case exceeded {timeout}s timeout"),
+    )
+
+
 @dataclass(slots=True)
 class SweepRunner:
     """Run benchmark cases sequentially or in parallel with ProcessPoolExecutor."""
@@ -116,6 +150,7 @@ class SweepRunner:
     max_workers: int = 1
     continue_on_failure: bool = True
     sweep: str | None = None
+    timeout: float | None = None
 
     def run(self) -> str:
         """Execute all pending cases and return the sweep ID used.
@@ -133,7 +168,10 @@ class SweepRunner:
             return sweep_id
 
         if self.max_workers > 1 and len(pending) > 1:
-            self._run_parallel(pending, sweep_id=sweep_id, store=store)
+            self._run_with_pool(pending, sweep_id=sweep_id, store=store)
+        elif self.timeout is not None:
+            # Use a single-thread pool so we get future.result(timeout=...)
+            self._run_with_pool(pending, sweep_id=sweep_id, store=store)
         else:
             self._run_sequential(pending, sweep_id=sweep_id, store=store)
 
@@ -171,29 +209,23 @@ class SweepRunner:
                 if progress is not None and task_id is not None:
                     progress.advance(task_id)
 
-    def _run_parallel(
+    def _run_with_pool(
         self,
         cases: list[_Case],
         *,
         sweep_id: str,
         store: BenchkitStore,
     ) -> None:
-        # Use ProcessPoolExecutor for real parallelism. Fall back to
-        # ThreadPoolExecutor if the benchmark function can't be pickled
-        # (e.g. lambdas, closures, or functions defined inside other functions).
-        try:
-            pickle.dumps(self.fn)
-            pool_class: type[ProcessPoolExecutor | ThreadPoolExecutor] = ProcessPoolExecutor
-        except (pickle.PicklingError, AttributeError, TypeError):
-            pool_class = ThreadPoolExecutor
+        pool_class = self._pick_pool_class()
+        workers = max(self.max_workers, 1)
 
         progress_cm = self._progress(len(cases))
         with progress_cm as progress:
-            label = f"[cyan]{self.id} ({self.max_workers}w)"
+            label = f"[cyan]{self.id}" if workers == 1 else f"[cyan]{self.id} ({workers}w)"
             task_id = progress.add_task(label, total=len(cases)) if progress is not None else None
 
-            with pool_class(max_workers=self.max_workers) as pool:
-                futures = {}
+            with pool_class(max_workers=workers) as pool:
+                futures: dict[concurrent.futures.Future[_CaseResult], _Case] = {}
                 for case in cases:
                     art_dir = str(
                         store.artifact_dir_for(
@@ -215,12 +247,43 @@ class SweepRunner:
                     futures[future] = case
 
                 for future in as_completed(futures):
-                    result = future.result()
+                    case = futures[future]
+                    try:
+                        result = future.result(timeout=self.timeout)
+                    except (TimeoutError, concurrent.futures.TimeoutError):
+                        art_dir = str(
+                            store.artifact_dir_for(
+                                benchmark=self.id,
+                                sweep=sweep_id,
+                                case_key=case.case_key,
+                            )
+                        )
+                        result = _handle_timeout(
+                            case,
+                            timeout=self.timeout or 0,
+                            benchmark=self.id,
+                            sweep=sweep_id,
+                            artifact_dir=art_dir,
+                            db_path=str(store.path),
+                        )
                     if result.error is not None and not self.continue_on_failure:
                         pool.shutdown(wait=False, cancel_futures=True)
                         raise result.error
                     if progress is not None and task_id is not None:
                         progress.advance(task_id)
+
+    def _pick_pool_class(self) -> type[ProcessPoolExecutor | ThreadPoolExecutor]:
+        """Choose the best executor class.
+
+        Returns:
+            type: ProcessPoolExecutor if the function is picklable, else ThreadPoolExecutor.
+        """
+        try:
+            pickle.dumps(self.fn)
+        except (pickle.PicklingError, AttributeError, TypeError):
+            return ThreadPoolExecutor
+        else:
+            return ProcessPoolExecutor
 
     def _iter_cases(self) -> Iterator[_Case]:
         for config in self.cases:

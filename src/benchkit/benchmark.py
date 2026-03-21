@@ -74,6 +74,7 @@ class BenchFunction:
         sweep: str | None = None,
         show_progress: bool = True,
         max_workers: int = 1,
+        timeout: float | None = None,
     ) -> Analysis:
         """Run an explicit case list in the current or a fresh sweep.
 
@@ -83,6 +84,8 @@ class BenchFunction:
             sweep: Use a specific sweep id.
             show_progress: Show a progress bar during execution.
             max_workers: Number of concurrent worker processes. 1 = sequential.
+            timeout: Maximum seconds per case. Cases exceeding this are recorded
+                as failures with ``TimeoutError``. None means no limit.
 
         Returns:
             Analysis: Read-only handle for the completed sweep.
@@ -103,6 +106,7 @@ class BenchFunction:
             show_progress=show_progress,
             max_workers=max_workers,
             sweep=resolved_sweep,
+            timeout=timeout,
         )
         actual_sweep = runner.run()
         return Analysis(id=self.id, sweep=actual_sweep)
