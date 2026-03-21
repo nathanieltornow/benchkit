@@ -27,7 +27,7 @@ def _normalize_case(case: object) -> dict[str, Any]:
         TypeError: If the case type is not supported.
     """
     if isinstance(case, dict):
-        return dict(case)
+        return {str(k): v for k, v in case.items()}
     if is_dataclass(case) and not isinstance(case, type):
         return dict(asdict(case))
     if hasattr(case, "__dict__"):

@@ -46,7 +46,7 @@ def _format_metrics(metrics: Any, max_len: int = 56) -> str:  # noqa: ANN401
     return text if len(text) <= max_len else f"{text[: max_len - 3]}..."
 
 
-@app.command("sweeps")  # type: ignore[misc]
+@app.command("sweeps")  # type: ignore[misc]  # typer decorator
 def sweeps_list(
     benchmark_id: Annotated[str | None, typer.Argument(help="Optional benchmark id.")] = None,
 ) -> None:
@@ -70,7 +70,7 @@ def sweeps_list(
     console.print(table)
 
 
-@app.command("runs")  # type: ignore[misc]
+@app.command("runs")  # type: ignore[misc]  # typer decorator
 def runs_list(
     benchmark_id: str,
     sweep: Annotated[str | None, typer.Option(help="Filter by sweep id.")] = None,
@@ -116,7 +116,7 @@ def runs_list(
     console.print(table)
 
 
-@app.command()  # type: ignore[misc]
+@app.command()  # type: ignore[misc]  # typer decorator
 def init(
     target: Annotated[str | None, typer.Argument(help="Target project directory.")] = None,
 ) -> None:
@@ -136,7 +136,7 @@ def init(
     _install_skill_to(target_dir / ".claude" / "skills" / "benchkit")
 
 
-@app.command("install-skill")  # type: ignore[misc]
+@app.command("install-skill")  # type: ignore[misc]  # typer decorator
 def install_skill() -> None:
     """Install the BenchKit skill globally for Claude Code.
 

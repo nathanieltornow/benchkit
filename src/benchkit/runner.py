@@ -183,9 +183,9 @@ class SweepRunner:
         # (e.g. lambdas, closures, or functions defined inside other functions).
         try:
             pickle.dumps(self.fn)
-            pool_class = ProcessPoolExecutor
+            pool_class: type[ProcessPoolExecutor | ThreadPoolExecutor] = ProcessPoolExecutor
         except (pickle.PicklingError, AttributeError, TypeError):
-            pool_class = ThreadPoolExecutor  # type: ignore[assignment]
+            pool_class = ThreadPoolExecutor
 
         progress_cm = self._progress(len(cases))
         with progress_cm as progress:
@@ -244,4 +244,4 @@ class SweepRunner:
 
 
 def _generate_sweep_id() -> str:
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S%fZ")
