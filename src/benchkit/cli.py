@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.resources
+import shutil
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -16,22 +17,31 @@ console = Console()
 app = typer.Typer(help="Inspect BenchKit sweeps and runs.")
 
 
-def _skill_content() -> str:
-    """Return the full text of the bundled skill file.
+def _skill_source() -> Path:
+    """Return the path to the bundled SKILL.md shipped with the package.
 
     Returns:
-        str: The skill file content.
+        Path: The skill file path.
     """
-    path = Path(str(importlib.resources.files("benchkit") / "skill.md"))
-    return path.read_text(encoding="utf-8")
+    return Path(str(importlib.resources.files("benchkit") / "skill.md"))
 
 
 def _format_config(config: dict[str, Any], max_len: int = 48) -> str:
+    """Format a compact config preview for tables.
+
+    Returns:
+        str: Truncated config string.
+    """
     text = ", ".join(f"{key}={value}" for key, value in config.items())
     return text if len(text) <= max_len else f"{text[: max_len - 3]}..."
 
 
 def _format_metrics(metrics: Any, max_len: int = 56) -> str:  # noqa: ANN401
+    """Format a compact metrics preview for tables.
+
+    Returns:
+        str: Truncated metrics string.
+    """
     text = ", ".join(f"{key}={value}" for key, value in metrics.items()) if isinstance(metrics, dict) else str(metrics)
     return text if len(text) <= max_len else f"{text[: max_len - 3]}..."
 
@@ -110,11 +120,10 @@ def runs_list(
 def init(
     target: Annotated[str | None, typer.Argument(help="Target project directory.")] = None,
 ) -> None:
-    """Set up BenchKit in a project directory.
+    """Install the BenchKit skill into a project.
 
-    Appends the benchkit skill to CLAUDE.md (local, typically gitignored)
-    so that AI agents know how to use benchkit in this project without
-    polluting your project's AGENTS.md.
+    Creates .claude/skills/benchkit/SKILL.md so Claude Code
+    auto-discovers the benchkit skill in this project.
 
     Raises:
         Exit: If the target directory does not exist.
@@ -124,45 +133,42 @@ def init(
         console.print(f"[red]Directory {target_dir} does not exist.[/red]")
         raise typer.Exit(1)
 
-    claude_md = target_dir / "CLAUDE.md"
-    skill = _skill_content()
-    marker = "# BenchKit -- Agentic Experiment Skill"
-
-    if claude_md.exists():
-        existing = claude_md.read_text(encoding="utf-8")
-        if marker in existing:
-            console.print("[dim]CLAUDE.md already contains the benchkit skill, skipping.[/dim]")
-            return
-        claude_md.write_text(existing.rstrip() + "\n\n" + skill, encoding="utf-8")
-        console.print(f"[green]Appended benchkit skill to {claude_md}[/green]")
-    else:
-        claude_md.write_text(skill, encoding="utf-8")
-        console.print(f"[green]Created {claude_md} with benchkit skill[/green]")
+    _install_skill_to(target_dir / ".claude" / "skills" / "benchkit")
 
 
 @app.command("install-skill")  # type: ignore[misc]
 def install_skill() -> None:
     """Install the BenchKit skill globally for Claude Code.
 
-    Inlines the full benchkit skill into ~/.claude/CLAUDE.md so that
-    the agent knows how to use benchkit in every conversation.
+    Creates ~/.claude/skills/benchkit/SKILL.md so the skill
+    is available in every Claude Code conversation.
     """
-    skill = _skill_content()
-    marker = "# BenchKit -- Agentic Experiment Skill"
+    _install_skill_to(Path.home() / ".claude" / "skills" / "benchkit")
 
-    claude_md = Path.home() / ".claude" / "CLAUDE.md"
-    claude_md.parent.mkdir(parents=True, exist_ok=True)
 
-    if claude_md.exists():
-        existing = claude_md.read_text(encoding="utf-8")
-        if marker in existing:
-            console.print("[dim]~/.claude/CLAUDE.md already contains the benchkit skill. Skipping.[/dim]")
+def _install_skill_to(skill_dir: Path) -> None:
+    """Copy the bundled SKILL.md into a target skill directory.
+
+    Raises:
+        Exit: If the bundled skill file is missing.
+    """
+    source = _skill_source()
+    if not source.exists():
+        console.print("[red]Could not find bundled skill file.[/red]")
+        raise typer.Exit(1)
+
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    dest = skill_dir / "SKILL.md"
+
+    if dest.exists():
+        existing = dest.read_text(encoding="utf-8")
+        new = source.read_text(encoding="utf-8")
+        if existing == new:
+            console.print(f"[dim]{dest} is already up to date.[/dim]")
             return
-        claude_md.write_text(existing.rstrip() + "\n\n" + skill, encoding="utf-8")
-        console.print(f"[green]Appended benchkit skill to {claude_md}[/green]")
-    else:
-        claude_md.write_text(skill, encoding="utf-8")
-        console.print(f"[green]Created {claude_md} with benchkit skill[/green]")
+
+    shutil.copy2(source, dest)
+    console.print(f"[green]Installed skill to {dest}[/green]")
 
 
 def main() -> None:

@@ -25,22 +25,26 @@ uv add /path/to/benchkit
 
 ## Set Up in a New Project
 
-Run `benchkit init` inside any project directory to install the agentic skill:
+### Option A: Copy the skill folder (simplest)
+
+Copy `skills/benchkit/` from this repo into your project or global Claude Code skills:
 
 ```bash
-cd ~/my-rust-project
-benchkit init
+# Per-project
+cp -r /path/to/benchkit/skills/benchkit ~/.claude/skills/
+
+# Or into a specific project
+cp -r /path/to/benchkit/skills/benchkit my-project/.claude/skills/
 ```
 
-This appends the benchkit skill to `CLAUDE.md` (local, typically gitignored) so that AI agents automatically know how to use benchkit for experiments in that project. Your project's `AGENTS.md` stays untouched.
-
-To install globally (every Claude Code conversation):
+### Option B: Use the CLI
 
 ```bash
-benchkit install-skill
+benchkit init                # project-local: .claude/skills/benchkit/SKILL.md
+benchkit install-skill       # global: ~/.claude/skills/benchkit/SKILL.md
 ```
 
-The project itself can be in any language.
+Claude Code auto-discovers the skill and can use it automatically or via `/benchkit`. Your project's `AGENTS.md` stays untouched. The project itself can be in any language.
 
 ## End-to-End Example
 

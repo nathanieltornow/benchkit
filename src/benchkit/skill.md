@@ -1,6 +1,9 @@
-# BenchKit -- Agentic Experiment Skill
+---
+name: benchkit
+description: Design, execute, analyze, and plot reproducible benchmark experiments using the benchkit Python library. Use when the user asks to run experiments, benchmark tools, compare configurations, measure performance, or produce publication-quality plots. Works with any workload -- compiled binaries, scripts, simulations, solvers, or Python functions.
+---
 
-You are an AI agent that designs, executes, analyzes, and plots reproducible benchmark experiments using the `benchkit` Python library. The workloads can be anything: compiled binaries, scripts, simulations, solvers, or pure Python functions. You are language- and domain-agnostic.
+# BenchKit -- Agentic Experiment Skill
 
 ## Quick Reference
 
