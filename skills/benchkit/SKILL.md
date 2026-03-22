@@ -133,13 +133,13 @@ Every benchmark script must be self-documenting:
 
 ### Resume
 
-Resume is ONLY for crashes or interruptions. Pass the sweep id explicitly:
+Resume is ONLY for crashes or interruptions. Set the `BENCHKIT_SWEEP` env var:
 
-```python
-analysis = my_benchmark.sweep(cases=CASES, sweep="20260322T143000000000Z")
+```bash
+BENCHKIT_SWEEP=20260322T143000000000Z uv run --group bench python benchmarks/scripts/compile_perf.py
 ```
 
-Never resume with changed code. Changed code = fresh sweep (the default).
+The script itself never mentions sweep IDs. Never resume with changed code -- changed code = fresh sweep (the default).
 
 ## Workflow
 

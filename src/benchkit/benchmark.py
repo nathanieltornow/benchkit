@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from dataclasses import asdict, dataclass, is_dataclass
 from itertools import product
 from typing import TYPE_CHECKING, Any
@@ -77,11 +78,12 @@ class BenchFunction:
         """Run an explicit case list.
 
         Each call starts a new sweep by default. To resume an interrupted sweep,
-        pass the sweep id explicitly with ``sweep=``.
+        set ``BENCHKIT_SWEEP=<sweep-id>`` or pass ``sweep=`` explicitly.
 
         Args:
             cases: Explicit list of case dicts, dataclass instances, or objects.
             sweep: Resume a specific sweep by id. Completed cases are skipped.
+                Also read from ``BENCHKIT_SWEEP`` env var if not passed.
             show_progress: Show progress during execution.
             max_workers: Number of concurrent worker processes. 1 = sequential.
             timeout: Maximum seconds per case. Cases exceeding this are recorded
@@ -91,6 +93,7 @@ class BenchFunction:
             Analysis: Read-only handle for the completed sweep.
         """
         normalized_cases = [_normalize_case(case) for case in cases]
+        resolved_sweep = sweep or os.environ.get("BENCHKIT_SWEEP") or None
 
         runner = SweepRunner(
             id=self.id,
@@ -98,7 +101,7 @@ class BenchFunction:
             cases=normalized_cases,
             show_progress=show_progress,
             max_workers=max_workers,
-            sweep=sweep,
+            sweep=resolved_sweep,
             timeout=timeout,
         )
         actual_sweep = runner.run()
