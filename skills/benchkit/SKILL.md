@@ -9,6 +9,8 @@ Python library for reproducible benchmark experiments. Orchestration is Python; 
 
 **Install:** `uv add git+https://github.com/nathanieltornow/benchkit@v0.0.1`
 
+**Every experiment must be journaled. Check `CLAUDE.md` for the journal path.**
+
 ## Project Layout
 
 ```
@@ -149,23 +151,33 @@ Experiment journal: <path-to-journal-file>
 
 **Before running an experiment:** read the journal to understand what was already tried. Do not repeat experiments without reason.
 
-**After every experiment:** append an entry. Format:
+**After every experiment:** append an entry. Include tables and figures when they help tell the story. Save figures next to the journal file (same directory).
 
 ```markdown
-## YYYY-MM-DD -- <short title>
+## YYYY-MM-DD -- GCC vs Clang optimization levels
 
-**Goal:** One sentence.
+**Goal:** Compare compile times across optimization levels.
 **Script:** `benchmarks/compile_perf.py`
 **Cases:** 2 compilers x 3 opt levels x 5 reps = 30 rows.
+
+| Compiler | O0  | O2   | O3   |
+| -------- | --- | ---- | ---- |
+| gcc      | 8ms | 18ms | 25ms |
+| clang    | 6ms | 11ms | 12ms |
+
+![Compile times](compile-perf-2026-03-22.png)
+
 **Findings:**
 
 - clang O3 is 2.1x faster than gcc O3 (12ms vs 25ms)
 - Diminishing returns past O2 for both compilers
-  **Next:** Test with LTO enabled.
+
+**Next:** Test with LTO enabled.
 ```
 
 Rules:
 
 - Always append, never edit or delete. Failed experiments get an entry too.
-- Keep entries concise. One sentence per finding, concrete numbers.
-- The journal is the research record. The benchmark script is the code. Don't duplicate.
+- Include a summary table when comparing multiple configurations.
+- Include a figure when it makes the result clearer. Save it next to the journal file.
+- Keep findings concise. One sentence per finding, concrete numbers.
