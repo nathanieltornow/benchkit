@@ -16,20 +16,34 @@ Python library for reproducible benchmark experiments. Orchestration is Python; 
 ```
 my-project/
   src/
-  benchmarks/                   # committed to git
-    compile_perf.py
+  benchmarks/
+    scripts/                    # benchmark definitions (persistent, committed)
+      compile_perf.py
+      decoder_comparison.py
+    analysis/                   # analysis + plotting (can be rewritten freely)
+      analyze_compile_perf.py
   .benchkit/                    # gitignored (DB + artifacts)
 ```
 
+**`benchmarks/scripts/`** -- benchmark definitions with function, cases, and sweep. These are the record of what was run. Commit them, don't modify after running.
+
+**`benchmarks/analysis/`** -- analysis and plotting. Disposable -- the agent can rewrite these to try different plots or aggregations. The data is safe in the DB.
+
+Never put sweep and analysis in the same script. Re-running an analysis script must not trigger a new sweep.
+
 ## API
 
+**Benchmark script** (`benchmarks/scripts/compile_perf.py`):
+
 ```python
+"""Compare compile times of gcc vs clang across optimization levels."""
+
 import benchkit as bk
 
 
 @bk.func("compile-perf")
 def compile_perf(compiler: str, opt_level: str) -> None:
-    """Benchmark compile time with 5 reps after warmup."""
+    """Run compiler with 5 repetitions after warmup."""
     bk.run(
         [compiler, f"-{opt_level}", "bench.c", "-o", "/dev/null"],
         name="warmup",
@@ -44,20 +58,32 @@ def compile_perf(compiler: str, opt_level: str) -> None:
         bk.context().save_result({"time_ms": parse_time(result.stdout)})
 
 
+# Compare gcc and clang across O0, O2, O3.
 CASES = bk.grid(compiler=["gcc", "clang"], opt_level=["O0", "O2", "O3"])
 
 if __name__ == "__main__":
-    analysis = compile_perf.sweep(cases=CASES, max_workers=4, timeout=300)
+    compile_perf.sweep(cases=CASES, max_workers=4, timeout=300)
+# Rerun: uv run --group bench python benchmarks/scripts/compile_perf.py
+```
 
-    df = analysis.load_frame()
-    summary = df.groupby(["config.compiler", "config.opt_level"])["result.time_ms"].agg(
-        ["mean", "std"]
-    )
+**Analysis script** (`benchmarks/analysis/analyze_compile_perf.py`):
 
-    with bk.pplot(preset="double-column", latex=True):
-        fig, ax = plt.subplots()
-        ...
-    analysis.save_figure(fig, plot_name="compile-times")
+```python
+"""Analyze and plot compile-perf results."""
+
+import benchkit as bk
+import matplotlib.pyplot as plt
+
+analysis = bk.open_analysis("compile-perf")
+df = analysis.load_frame()
+summary = df.groupby(["config.compiler", "config.opt_level"])["result.time_ms"].agg(
+    ["mean", "std"]
+)
+
+with bk.pplot(preset="double-column", latex=True):
+    fig, ax = plt.subplots()
+    ...
+analysis.save_figure(fig, plot_name="compile-times")
 ```
 
 ## Rules
