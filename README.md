@@ -5,7 +5,7 @@ Benchmark sweeps with automatic resume, parallel execution, and publication-qual
 ## Install
 
 ```bash
-uv add git+https://github.com/nathanieltornow/benchkit@v0.0.1
+uv add --group bench git+https://github.com/nathanieltornow/benchkit@v0.0.1
 benchkit init  # install Claude Code skills
 ```
 

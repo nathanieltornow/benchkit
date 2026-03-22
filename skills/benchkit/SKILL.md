@@ -7,7 +7,7 @@ description: Design, execute, analyze, and plot reproducible benchmark experimen
 
 Python library for reproducible benchmark experiments. Orchestration is Python; the workload is anything (Rust, C++, shell scripts, Python).
 
-**Install:** `uv add git+https://github.com/nathanieltornow/benchkit@v0.0.1`
+**Install:** `uv add --group bench git+https://github.com/nathanieltornow/benchkit@v0.0.1`
 
 **Every experiment must be journaled. Journal path: `$BENCHKIT_JOURNAL`.**
 
