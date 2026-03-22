@@ -16,7 +16,6 @@ my-project/
   src/
   benchmarks/                   # committed to git
     compile_perf.py
-    JOURNAL.md                  # append-only experiment log
   .benchkit/                    # gitignored (DB + artifacts)
 ```
 
@@ -114,41 +113,11 @@ analysis = my_benchmark.sweep(cases=CASES, sweep="20260322T143000000000Z")
 
 Never resume with changed code. Changed code = fresh sweep (the default).
 
-## Journal -- MANDATORY
-
-**Every experiment gets a journal entry. No exceptions. No deferring.**
-
-After every sweep -- successful, partial, or failed -- append an entry to `benchmarks/JOURNAL.md` before reporting to the user. Create with `# Experiment Journal` header on first use.
-
-```markdown
-## compile-perf -- GCC vs Clang optimization levels
-
-**Date:** 2026-03-22
-**Sweep:** 20260322T143000000000Z
-**Status:** completed
-
-**Goal:** Compare compile times of gcc and clang across O0-O3.
-**Cases:** 2 compilers x 3 opt levels x 5 reps = 30 rows.
-**Key results:**
-
-- clang O3 is 2.1x faster than gcc O3 (mean 12ms vs 25ms)
-
-**Rerun:** `uv run python benchmarks/compile_perf.py`
-```
-
-Rules:
-
-- Always append, never delete. Failed experiments get an entry too.
-- Write after the sweep completes, not before. Include actual results.
-- One sentence per finding. Link to figures, don't inline tables.
-
 ## Workflow
-
-**Do not skip any step.**
 
 1. **Clarify** -- what is being measured and why. No experiments without clear intent.
 2. **Implement** -- self-documenting benchmark script in `benchmarks/`.
 3. **Execute** -- `.sweep(cases=...)`. Check `analysis.summary()`.
-4. **Analyze** -- `load_frame()`, compute summaries.
+4. **Analyze** -- `load_frame()`, aggregate with pandas, check for anomalies.
 5. **Plot** -- publication-quality figures.
-6. **Journal** -- append entry to `benchmarks/JOURNAL.md`. **Not optional.**
+6. **Report** -- clearly present findings, key metrics, and figures to the user.
