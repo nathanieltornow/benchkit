@@ -11,6 +11,22 @@ BenchKit (`benchkit`) is a Python library for running reproducible benchmark exp
 
 **Source:** https://github.com/nathanieltornow/benchkit
 
+## Project Layout
+
+All benchmark work lives in `benchmarks/` inside the project. This folder is committed to git so experiments are versioned and shared with collaborators. The `.benchkit/` directory (SQLite DB + artifacts) is gitignored -- results are reproduced by re-running scripts.
+
+```
+my-project/
+  src/                          # project source code
+  benchmarks/                   # committed -- all experiment work lives here
+    compile_perf.py             # benchmark scripts
+    simulation_accuracy.py
+    JOURNAL.md                  # append-only experiment log
+    SUMMARY.md                  # current best results (overwritten)
+  .benchkit/                    # gitignored -- DB + artifacts
+  .gitignore                    # must include .benchkit/
+```
+
 ## Quick Reference
 
 ```python
@@ -24,19 +40,16 @@ def my_benchmark(param_a: str, param_b: int) -> None:
     bk.context().save_result({"metric": parse_metric(result.stdout)})
 
 
-# 2. Execute (sequential)
-analysis = my_benchmark.sweep(cases=[{"param_a": "x", "param_b": 1}, ...])
-
-# 2b. Execute (parallel -- 4 cases at a time)
-analysis = my_benchmark.sweep(cases=CASES, max_workers=4)
+# 2. Execute
+analysis = my_benchmark.sweep(cases=CASES, max_workers=4, timeout=300)
 
 # 3. Analyze
 df = analysis.load_frame()
 run = analysis.get_run(config={...}, status=bk.RunStatus.OK)
 
 # 4. Plot
-with bk.pplot():
-    fig, ax = plt.subplots(figsize=(180 / 25.4, 45 / 25.4))
+with bk.pplot(preset="double-column", latex=True):
+    fig, ax = plt.subplots()
     ...
 analysis.save_figure(fig, plot_name="my-plot")
 ```
@@ -51,70 +64,73 @@ analysis.save_figure(fig, plot_name="my-plot")
    - Write repeated internal samples with `bk.context().append_result({...})`.
    - Save all non-metric evidence as artifacts (`save_json`, `save_text`, `save_pickle`, `copy_file`).
 4. Call the decorated function directly for a single case: `run = my_benchmark(param_a="x", param_b=1)`.
-5. Use `.sweep(cases=[...])` for many cases. Each `.sweep()` call starts a fresh sweep.
-6. Use `.sweep(cases=[...], max_workers=N)` for parallel execution. Uses `ProcessPoolExecutor` (falls back to threads if not picklable). Default is sequential.
+5. Use `.sweep(cases=[...])` for many cases. **Each `.sweep()` call starts a fresh sweep.**
+6. Use `.sweep(cases=[...], max_workers=N)` for parallel execution.
 7. Use `timeout=` on `.sweep()` to limit each case (seconds). Timed-out cases are recorded as failures.
-8. To resume an interrupted sweep, pass `sweep=<sweep-id>` explicitly. Completed cases are skipped.
-9. Use `bk.grid(...)` only for simple Cartesian products.
-10. Run benchmarks from Python code. The CLI is for inspection only.
+8. Use `bk.grid(...)` only for simple Cartesian products.
+9. Run benchmarks from Python scripts. The CLI is for inspection only.
+
+### Resume
+
+Resume is ONLY for recovering from crashes, interruptions, or retrying failed cases. It is NOT the default.
+
+To resume, pass the sweep id from the failed run explicitly:
+
+```python
+# First run -- crashed after 50 of 100 cases
+analysis = my_benchmark.sweep(cases=CASES)
+# prints: my-benchmark: 50/100 ... then crashes
+
+# Resume -- pass the sweep id, completed cases are skipped
+analysis = my_benchmark.sweep(cases=CASES, sweep="20260322T143000000000Z")
+```
+
+Use `analysis.summary()` and `analysis.is_complete(len(CASES))` to check if all cases finished.
+
+**Never resume to re-run with changed code.** If the benchmark function or tooling changed, start a fresh sweep (the default). Stale results from old code are worthless.
 
 ## Script Conventions
 
-Every benchmark script MUST be self-documenting. The agent always writes benchmark scripts with:
+Every benchmark script MUST be self-documenting. Always write scripts with:
 
 1. **A module docstring** explaining what the experiment measures and why.
-2. **Cases defined explicitly** with a comment per group explaining the parameter choices:
+2. **Cases defined explicitly** with a comment explaining the parameter choices:
    ```python
    # Compare gcc and clang across optimization levels on the main benchmark source.
    CASES = bk.grid(compiler=["gcc", "clang"], opt_level=["O0", "O1", "O2", "O3"])
    ```
 3. **The benchmark function** with a docstring describing what it runs and what metrics it captures.
-4. **A rerun command** at the bottom as a comment: `# Rerun: uv run python benchmarks/compile_perf.py`
+4. **A rerun command** at the bottom: `# Rerun: uv run python benchmarks/compile_perf.py`
 
 ## Analysis Rules
 
 1. Reopen stored runs with `bk.open_analysis("benchmark-id")`.
 2. Use `analysis.load_frame()` for dataframe-based analysis.
 3. Use `analysis.load_runs()` or `analysis.get_run(...)` when you need artifacts.
-4. Save derived tables with `analysis.save_dataframe(df, "name")`.
-5. Save figures with `analysis.save_figure(fig, plot_name="name")`.
-6. To compare across sweeps, load multiple analyses and merge their dataframes on shared config columns.
+4. Use `analysis.summary()` to see run counts by status.
+5. Use `analysis.is_complete(n)` to check if all n cases succeeded.
+6. Save derived tables with `analysis.save_dataframe(df, "name")`.
+7. Save figures with `analysis.save_figure(fig, plot_name="name")`.
 
 ## Plot Rules
 
 1. Use `with bk.pplot():` for shared publication style only.
 2. Plot logic stays in normal matplotlib / pandas / seaborn code.
 3. Figure sizes:
-   - Double-column: `FIGURE_WIDTH_MM = 180.0`
-   - Single-column: `FIGURE_WIDTH_MM = 80.0`
-   - Choose a slim `FIGURE_HEIGHT_MM` explicitly (house default: `45.0 mm`).
-4. For bar plots, use patches with visible outlines.
-5. For slim figures, prefer dense hatches (`//`, `///`) over sparse ones (`/`).
-6. Every plotting script must define an explicit theme mapping:
-   ```python
-   THEME = {
-       "gcc": {"color": "#4477AA", "marker": "o", "hatch": None},
-       "clang": {"color": "#EE6677", "marker": "s", "hatch": "//"},
-   }
-   ```
-7. Reuse the same visual encoding for recurring labels across related figures.
+   - Double-column: `preset="double-column"` (180 x 45 mm)
+   - Single-column: `preset="single-column"` (85 x 55 mm)
+   - Slide: `preset="slide"` (254 x 143 mm)
+4. Use `latex=True` when the paper uses LaTeX.
+5. Every plotting script must define an explicit theme mapping.
+6. Reuse the same visual encoding for recurring labels across related figures.
 
-## Storage Conventions
+## Documentation -- MANDATORY
 
-- BenchKit writes to `.benchkit/` under the project root by default.
-- Override with `BENCHKIT_HOME=/path/to/output-root`.
-- Only the BenchKit root is configurable. All internal paths are library-owned.
-- `benchmarks.sqlite` -- single SQLite database (WAL mode) with one `runs` table.
-- `runs/<benchmark-id>/<sweep-id>/<case-key>/` -- run artifact folders.
-- `analysis/<benchmark-id>/<sweep-id>/` -- analysis outputs.
+**You MUST document every experiment. No exceptions.** After every sweep -- successful, partial, or failed -- you MUST update both the journal and the summary. Do not skip this step. Do not defer it. Do not say "I'll update the journal later." The journal and summary are updated immediately after analyzing results, before reporting back to the user.
 
-## Experiment Journal
+### Journal (`benchmarks/JOURNAL.md`)
 
-You MUST maintain an experiment journal at `experiments/JOURNAL.md` in the project root. This is a running log of every experiment you execute. It serves as a lab notebook that the user can review to understand what was tried, what worked, and what the key findings are.
-
-### Journal format
-
-Append one entry per experiment. Each entry follows this template:
+Append-only log of every experiment. Create with `# Experiment Journal` header on first use.
 
 ```markdown
 ## <benchmark-id> -- <short title>
@@ -125,28 +141,27 @@ Append one entry per experiment. Each entry follows this template:
 
 **Goal:** One sentence describing what this experiment tests.
 
-**Cases:** Brief description of the parameter space (e.g. "gcc vs clang, O0/O1/O2/O3, 3 source files = 24 cases").
+**Cases:** Brief description of the parameter space (e.g. "gcc vs clang, O0-O3, 3 sources = 24 cases").
 
 **Key results:**
 
 - <metric>: <value> (best), <value> (worst)
 - <finding in one sentence>
 
-**Figures:** `analysis/<benchmark-id>/<sweep-id>/figures/<plot-name>/`
+**Figures:** `.benchkit/analysis/<benchmark-id>/<sweep-id>/figures/`
 
 **Rerun:** `uv run python benchmarks/<script>.py`
 ```
 
-### Journal rules
+Rules:
 
-1. **Always append, never delete.** The journal is append-only. Even failed experiments get an entry -- they record what didn't work.
-2. **Write the entry after the sweep completes**, not before. Include actual results, not expectations.
-3. **Keep entries concise.** The journal is a summary, not a report. One sentence per finding. Link to figures and data rather than inlining tables.
-4. **Create the file on first use.** If `experiments/JOURNAL.md` does not exist, create it with a `# Experiment Journal` header.
+- **Always append, never delete.** Failed experiments get an entry too -- they record what didn't work.
+- **Write after the sweep completes**, not before. Include actual results.
+- **Keep entries concise.** One sentence per finding.
 
-### Summary file
+### Summary (`benchmarks/SUMMARY.md`)
 
-In addition to the journal, maintain a `experiments/SUMMARY.md` that contains only the current best results and key conclusions across all experiments. This file is **overwritten** (not appended) each time you update it. It should answer: "what do we know right now?"
+Overwritten each time. Answers: "what do we know right now?"
 
 ```markdown
 # Experiment Summary
@@ -168,19 +183,16 @@ _Last updated: YYYY-MM-DD_
 - <what to try next>
 ```
 
-Update `SUMMARY.md` after every successful experiment.
-
 ## Agent Workflow
 
-When asked to run an experiment, follow this sequence:
+When asked to run an experiment, follow this sequence. **Do not skip any step.**
 
-1. **Clarify** -- understand what is being measured, what the independent variables are, and what success looks like.
-2. **Implement** -- write a benchmark function with `@bk.func(...)`. Use `bk.run(...)` for external tools.
-3. **Define cases** -- build the case list explicitly or with `bk.grid(...)`.
-4. **Execute** -- call `.sweep(cases=...)`. Watch for failures.
-5. **Analyze** -- load the dataframe, compute summaries, check for anomalies.
-6. **Plot** -- produce publication-quality figures with explicit themes.
-7. **Journal** -- append an entry to `experiments/JOURNAL.md` with the goal, cases, key results, and rerun command.
-8. **Summary** -- update `experiments/SUMMARY.md` with the current best results and open questions.
+1. **Clarify** -- understand what is being measured, what the independent variables are, and what success looks like. Do not run experiments without clear intent.
+2. **Implement** -- write a self-documenting benchmark script in `benchmarks/`.
+3. **Execute** -- call `.sweep(cases=...)`. Check `analysis.summary()` for failures.
+4. **Analyze** -- load the dataframe, compute summaries, check for anomalies.
+5. **Plot** -- produce publication-quality figures with explicit themes.
+6. **Journal** -- append an entry to `benchmarks/JOURNAL.md`. **This is not optional.**
+7. **Summary** -- update `benchmarks/SUMMARY.md`. **This is not optional.**
 
-When asked to compare across experiments, load multiple analyses and merge their dataframes on shared config columns.
+Only after completing ALL steps, report results to the user.
