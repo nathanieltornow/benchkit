@@ -162,7 +162,7 @@ class Analysis:
             raise ValueError(msg)
         return matches[0]
 
-    def save_dataframe(self, df: pd.DataFrame, name: str, *, file_format: str = "parquet") -> Path:
+    def save_dataframe(self, df: pd.DataFrame, name: str, *, file_format: str = "csv") -> Path:
         """Save an analysis dataframe.
 
         Returns:

@@ -47,7 +47,7 @@ def test_sweep_runs_cases_and_produces_analysis(tmp_path: Path, monkeypatch: pyt
     figure_paths = analysis.save_figure(fig, plot_name="build-perf")
     plt.close(fig)
 
-    assert table_path == analysis._data_dir / "results.parquet"
+    assert table_path == analysis._data_dir / "results.csv"
     assert table_path.exists()
     assert len(figure_paths) == 2
     assert all(path.exists() for path in figure_paths)
