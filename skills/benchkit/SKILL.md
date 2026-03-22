@@ -143,13 +143,13 @@ Never resume with changed code. Changed code = fresh sweep (the default).
 
 The journal is a private, append-only research log that lives outside the project repo. It records what was tried across all experiments so you (and future agents) can see the full history.
 
-**Configuration:** The project's `CLAUDE.md` must specify the journal path:
+**Configuration:** Set the `BENCHKIT_JOURNAL` environment variable to the journal file path:
 
-```markdown
-Experiment journal: <path-to-journal-file>
+```bash
+export BENCHKIT_JOURNAL=<path-to-journal-file>
 ```
 
-If no journal path is configured, **ask the user** for one before running any experiment. Do not proceed without a journal path.
+If `BENCHKIT_JOURNAL` is not set, **ask the user** for the path before running any experiment. Do not proceed without a journal path.
 
 **Before running an experiment:** read the journal to understand what was already tried. Do not repeat experiments without reason.
 
