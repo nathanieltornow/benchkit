@@ -106,6 +106,31 @@ class Analysis:
         )
         return [run_from_row(row) for row in rows]
 
+    def summary(self) -> dict[str, int]:
+        """Return a count of runs by status.
+
+        Returns:
+            dict[str, int]: Mapping of status to count (e.g. ``{"ok": 5, "failure": 1}``).
+        """
+        rows = default_store().query_runs(benchmark=self.id, sweep=self.sweep)
+        counts: dict[str, int] = {}
+        for row in rows:
+            s = row["status"]
+            counts[s] = counts.get(s, 0) + 1
+        return counts
+
+    def is_complete(self, expected: int) -> bool:
+        """Check whether the sweep has the expected number of successful runs.
+
+        Args:
+            expected: The number of cases that should have completed successfully.
+
+        Returns:
+            bool: True if the number of OK runs matches expected.
+        """
+        counts = self.summary()
+        return counts.get("ok", 0) >= expected
+
     def __iter__(self) -> Iterator[Run]:
         """Iterate over all runs in this sweep.
 
