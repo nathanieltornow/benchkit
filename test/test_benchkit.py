@@ -173,14 +173,16 @@ def test_run_folders_are_nested_by_benchmark_and_sweep(tmp_path: Path, monkeypat
         bk.context().save_json("raw.json", {"size": size})
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    analysis = nested_layout.sweep(cases=[{"size": 8}], sweep="sweep-a", show_progress=False)
+    analysis = nested_layout.sweep(cases=[{"size": 8}], show_progress=False)
     run = analysis.get_run(config={"size": 8}, status=bk.RunStatus.OK)
 
     relative = run.artifact_dir.relative_to(tmp_path / "home")
-    assert relative.parts[:3] == ("runs", "nested-layout", "sweep-a")
+    assert relative.parts[0] == "runs"
+    assert relative.parts[1] == "nested-layout"
+    assert len(relative.parts) >= 4  # runs/benchmark/sweep/case_key
 
 
-def test_resume_skips_completed_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resume_skips_completed_cases_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
     calls = {"count": 0}
 
@@ -189,14 +191,12 @@ def test_resume_skips_completed_cases(tmp_path: Path, monkeypatch: pytest.Monkey
         calls["count"] += 1
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    # First sweep runs 2 cases
-    analysis = resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
-    sweep_id = analysis.sweep_id
+    # First call runs 2 cases
+    resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
 
-    # Resume the same sweep -- completed cases are skipped, new case runs
+    # Second call resumes -- completed cases skipped, new case runs
     resume_benchmark.sweep(
         cases=[{"size": 8}, {"size": 16}, {"size": 32}],
-        sweep=sweep_id,
         show_progress=False,
     )
 
@@ -210,11 +210,17 @@ def test_open_analysis_defaults_to_latest_sweep(tmp_path: Path, monkeypatch: pyt
     def default_sweep_benchmark(size: int) -> None:
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    default_sweep_benchmark.sweep(cases=[{"size": 8}], sweep="sweep-a", show_progress=False)
-    default_sweep_benchmark.sweep(cases=[{"size": 16}], sweep="sweep-b", show_progress=False)
+    # First sweep
+    a1 = default_sweep_benchmark.sweep(cases=[{"size": 8}], show_progress=False)
 
+    # Force a second sweep
+    monkeypatch.setenv("BENCHKIT_NEW_SWEEP", "1")
+    a2 = default_sweep_benchmark.sweep(cases=[{"size": 16}], show_progress=False)
+    monkeypatch.delenv("BENCHKIT_NEW_SWEEP")
+
+    assert a1.sweep_id != a2.sweep_id
     analysis = bk.open_analysis("default-sweep-benchmark")
-    assert analysis.sweep == "sweep-b"
+    assert analysis.sweep == a2.sweep_id
     assert analysis.get_run(config={"size": 16}, status=bk.RunStatus.OK).metrics == {"compile_time_ms": 16.0}
 
 
@@ -257,7 +263,7 @@ def test_parallel_sweep_produces_correct_results(tmp_path: Path, monkeypatch: py
         assert run.metrics == {"compile_time_ms": float(run.config["size"])}
 
 
-def test_each_sweep_call_starts_fresh_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_new_sweep_env_forces_fresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
     calls = {"count": 0}
 
@@ -267,8 +273,14 @@ def test_each_sweep_call_starts_fresh_by_default(tmp_path: Path, monkeypatch: py
         bk.context().save_result({"value": float(size)})
 
     a1 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
-    a2 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
 
-    # Two separate sweeps, both ran the same case
-    assert a1.sweep_id != a2.sweep_id
+    # Without BENCHKIT_NEW_SWEEP, second call resumes (skips completed)
+    a2 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
+    assert a1.sweep_id == a2.sweep_id
+    assert calls["count"] == 1
+
+    # With BENCHKIT_NEW_SWEEP=1, forces a fresh sweep
+    monkeypatch.setenv("BENCHKIT_NEW_SWEEP", "1")
+    a3 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
+    assert a3.sweep_id != a1.sweep_id
     assert calls["count"] == 2

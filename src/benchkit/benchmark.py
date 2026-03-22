@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from .analysis import Analysis
 from .runner import SweepRunner
+from .store import default_store
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -70,20 +71,17 @@ class BenchFunction:
         self,
         *,
         cases: Sequence[Any],
-        sweep: str | None = None,
         show_progress: bool = True,
         max_workers: int = 1,
         timeout: float | None = None,
     ) -> Analysis:
         """Run an explicit case list.
 
-        Each call starts a new sweep by default. To resume an interrupted sweep,
-        set ``BENCHKIT_SWEEP=<sweep-id>`` or pass ``sweep=`` explicitly.
+        By default, resumes the latest sweep (skipping completed cases).
+        Set ``BENCHKIT_NEW_SWEEP=1`` to force a fresh sweep.
 
         Args:
             cases: Explicit list of case dicts, dataclass instances, or objects.
-            sweep: Resume a specific sweep by id. Completed cases are skipped.
-                Also read from ``BENCHKIT_SWEEP`` env var if not passed.
             show_progress: Show progress during execution.
             max_workers: Number of concurrent worker processes. 1 = sequential.
             timeout: Maximum seconds per case. Cases exceeding this are recorded
@@ -93,7 +91,9 @@ class BenchFunction:
             Analysis: Read-only handle for the completed sweep.
         """
         normalized_cases = [_normalize_case(case) for case in cases]
-        resolved_sweep = sweep or os.environ.get("BENCHKIT_SWEEP") or None
+        force_new = os.environ.get("BENCHKIT_NEW_SWEEP", "").strip() == "1"
+
+        resolved_sweep = None if force_new else default_store().latest_sweep(self.id)
 
         runner = SweepRunner(
             id=self.id,

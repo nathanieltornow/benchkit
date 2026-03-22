@@ -92,7 +92,7 @@ analysis.save_figure(fig, plot_name="compile-times")
 
 - `bk.run(command, name=..., timeout=...)` runs any executable and captures stdout/stderr as artifacts.
 - `bk.context().save_result({...})` writes one row to the DB. Call it once per repetition.
-- Each `.sweep()` call starts a fresh sweep. To resume a crashed sweep, pass `sweep=<id>` explicitly.
+- `.sweep()` resumes the latest sweep by default, skipping completed cases. Set `BENCHKIT_NEW_SWEEP=1` to force fresh.
 - `max_workers=N` for parallel execution (ProcessPoolExecutor). `timeout=` limits each case in seconds.
 - Always put `.sweep()` and analysis inside `if __name__ == "__main__":` (required for multiprocessing).
 - `bk.grid(...)` for simple Cartesian products. Explicit case lists otherwise.
@@ -131,15 +131,15 @@ Every benchmark script must be self-documenting:
 4. `if __name__ == "__main__":` block.
 5. Rerun command at the bottom: `# Rerun: uv run python benchmarks/compile_perf.py`
 
-### Resume
+### Resume and Fresh Sweeps
 
-Resume is ONLY for crashes or interruptions. Set the `BENCHKIT_SWEEP` env var:
+By default, re-running a script resumes the latest sweep and skips completed cases. To force a fresh sweep after code changes:
 
 ```bash
-BENCHKIT_SWEEP=20260322T143000000000Z uv run --group bench python benchmarks/scripts/compile_perf.py
+BENCHKIT_NEW_SWEEP=1 uv run --group bench python benchmarks/scripts/compile_perf.py
 ```
 
-The script itself never mentions sweep IDs. Never resume with changed code -- changed code = fresh sweep (the default).
+Scripts never mention sweep IDs. The library handles everything.
 
 ## Workflow
 
