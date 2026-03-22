@@ -132,3 +132,38 @@ Never resume with changed code. Changed code = fresh sweep (the default).
 
    Bad: "The results are in the database."
    Good: "clang O3 compiles 2.1x faster than gcc O3 (12ms vs 25ms, std < 1ms across 5 reps). Both compilers show diminishing returns past O2. Next: test with LTO."
+
+7. **Journal** -- if a journal file is configured (see below), append your findings. **Not optional when configured.**
+
+## Journal
+
+The journal is a private, append-only research log that lives outside the project repo. It records what was tried across all experiments so you (and future agents) can see the full history.
+
+**Configuration:** The project's `CLAUDE.md` must specify the journal path:
+
+```markdown
+Experiment journal: ~/work/phd/journals/my-compiler.md
+```
+
+**Before running an experiment:** read the journal to understand what was already tried. Do not repeat experiments without reason.
+
+**After every experiment:** append an entry. Format:
+
+```markdown
+## YYYY-MM-DD -- <short title>
+
+**Goal:** One sentence.
+**Script:** `benchmarks/compile_perf.py`
+**Cases:** 2 compilers x 3 opt levels x 5 reps = 30 rows.
+**Findings:**
+
+- clang O3 is 2.1x faster than gcc O3 (12ms vs 25ms)
+- Diminishing returns past O2 for both compilers
+  **Next:** Test with LTO enabled.
+```
+
+Rules:
+
+- Always append, never edit or delete. Failed experiments get an entry too.
+- Keep entries concise. One sentence per finding, concrete numbers.
+- The journal is the research record. The benchmark script is the code. Don't duplicate.
