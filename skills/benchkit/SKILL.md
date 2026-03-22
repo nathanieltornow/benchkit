@@ -141,33 +141,49 @@ Never resume with changed code. Changed code = fresh sweep (the default).
 
 **Every experiment must be journaled. No exceptions. No deferring.**
 
-The journal is a private, append-only research log that lives outside the project repo. It records what was tried across all experiments so you (and future agents) can see the full history.
+The journal is a private research log that lives outside the project repo. It uses one file per experiment for easy navigation, cross-referencing, and compatibility with tools like Obsidian.
 
-**Configuration:** Set the `BENCHKIT_JOURNAL` environment variable to the journal file path:
+**Configuration:** `BENCHKIT_JOURNAL` points to the journal **directory**:
 
 ```bash
-export BENCHKIT_JOURNAL=<path-to-journal-file>
+export BENCHKIT_JOURNAL=<path-to-journal-directory>
 ```
 
-If `BENCHKIT_JOURNAL` is not set, **ask the user** for the path before running any experiment. Do not proceed without a journal path.
+If `BENCHKIT_JOURNAL` is not set, **ask the user** for the path before running any experiment.
 
-**Before running an experiment:** read the journal to understand what was already tried. Do not repeat experiments without reason.
+**Directory structure:**
 
-**After every experiment:** append an entry. Include tables and figures when they help tell the story. Save figures next to the journal file (same directory).
+```
+$BENCHKIT_JOURNAL/
+  index.md                              # project overview, updated after each experiment
+  2026-03-22-compile-perf.md            # one file per experiment
+  2026-03-22-compile-perf.png           # figures next to the entry
+  2026-03-23-decoder-comparison.md
+  2026-03-23-decoder-comparison.png
+```
+
+**Before running an experiment:** read `index.md` and scan filenames to understand what was already tried. Do not repeat experiments without reason.
+
+**After every experiment:**
+
+1. Create a new file `YYYY-MM-DD-<benchmark-id>.md`. If the file already exists (same experiment re-run on the same day), append a suffix: `YYYY-MM-DD-<benchmark-id>-2.md`.
+
+2. Write the entry:
 
 ```markdown
-## YYYY-MM-DD -- GCC vs Clang optimization levels
+# GCC vs Clang optimization levels
 
 **Goal:** Compare compile times across optimization levels.
 **Script:** `benchmarks/compile_perf.py`
 **Cases:** 2 compilers x 3 opt levels x 5 reps = 30 rows.
+**Related:** [[2026-03-20-compile-perf]] (previous run without O3)
 
 | Compiler | O0  | O2   | O3   |
 | -------- | --- | ---- | ---- |
 | gcc      | 8ms | 18ms | 25ms |
 | clang    | 6ms | 11ms | 12ms |
 
-![Compile times](compile-perf-2026-03-22.png)
+![Compile times](2026-03-22-compile-perf.png)
 
 **Findings:**
 
@@ -177,9 +193,21 @@ If `BENCHKIT_JOURNAL` is not set, **ask the user** for the path before running a
 **Next:** Test with LTO enabled.
 ```
 
+3. Update `index.md` with a one-line summary:
+
+```markdown
+# My Project -- Experiment Index
+
+| Date       | Experiment                        | Key finding                      |
+| ---------- | --------------------------------- | -------------------------------- |
+| 2026-03-22 | [[2026-03-22-compile-perf]]       | clang O3 2.1x faster than gcc O3 |
+| 2026-03-23 | [[2026-03-23-decoder-comparison]] | union-find decoder 3x faster     |
+```
+
 Rules:
 
-- Always append, never edit or delete. Failed experiments get an entry too.
-- Include a summary table when comparing multiple configurations.
-- Include a figure when it makes the result clearer. Save it next to the journal file.
+- One file per experiment. Never edit old entries.
+- Use `[[wikilinks]]` to cross-reference related experiments.
+- Include tables when comparing configurations. Include figures when they clarify.
 - Keep findings concise. One sentence per finding, concrete numbers.
+- Figures are saved in the same directory, named to match the entry file.
