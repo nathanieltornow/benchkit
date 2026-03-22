@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
-import json
 from dataclasses import asdict, dataclass, is_dataclass
 from itertools import product
 from typing import TYPE_CHECKING, Any
@@ -17,23 +15,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
     from .logging import Run
-
-
-def _sweep_id_for_cases(benchmark_id: str, cases: list[dict[str, Any]]) -> str:
-    """Derive a deterministic sweep ID from the benchmark and case list.
-
-    Same benchmark + same cases = same sweep ID = automatic resume.
-    Different cases = different sweep ID = fresh run.
-
-    Returns:
-        str: A stable sweep identifier.
-    """
-    payload = json.dumps(
-        {"benchmark": benchmark_id, "cases": sorted(cases, key=lambda c: json.dumps(c, sort_keys=True))},
-        default=str,
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()[:16]
 
 
 def _normalize_case(case: object) -> dict[str, Any]:
@@ -82,9 +63,7 @@ class BenchFunction:
             Run: The completed run.
         """
         case = self._bind_case(*args, **kwargs)
-        # Use latest sweep so consecutive single calls accumulate in the same sweep
-        latest = default_store().latest_sweep(self.id)
-        analysis = self.sweep(cases=[case], sweep=latest, show_progress=False)
+        analysis = self.sweep(cases=[case], show_progress=False)
         return analysis.get_run(config=case)
 
     def sweep(
@@ -98,6 +77,9 @@ class BenchFunction:
         timeout: float | None = None,
     ) -> Analysis:
         """Run an explicit case list in the current or a fresh sweep.
+
+        By default, resumes the latest sweep for this benchmark (skipping
+        completed cases). Pass ``new_sweep=True`` to start fresh.
 
         Args:
             cases: Explicit list of case dicts, dataclass instances, or objects.
@@ -118,8 +100,7 @@ class BenchFunction:
         elif new_sweep:
             resolved_sweep = None
         else:
-            # Deterministic sweep ID from cases: same cases = resume, different cases = new sweep
-            resolved_sweep = _sweep_id_for_cases(self.id, normalized_cases)
+            resolved_sweep = default_store().latest_sweep(self.id)
 
         runner = SweepRunner(
             id=self.id,
