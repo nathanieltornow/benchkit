@@ -58,8 +58,9 @@ if __name__ == "__main__":
 2. Define benchmarks with `@bk.func("benchmark-id")`.
 3. Inside the benchmark function:
    - Run external tools with `bk.run(command, name=..., timeout=...)`. This works with any executable -- compilers, simulators, solvers, scripts in any language.
-   - Write the canonical final metrics with `bk.context().save_result({...})`.
-   - Write repeated internal samples with `bk.context().append_result({...})`.
+   - **Repeat each measurement** (typically 5 times) for statistical confidence. The benchmark function manages repetitions, warmup, and timing internally.
+   - Log each repetition with `bk.context().append_result({...})` for raw samples.
+   - Write the aggregate with `bk.context().save_result({...})` including mean, std, min, max.
    - Save all non-metric evidence as artifacts (`save_json`, `save_text`, `save_pickle`, `copy_file`).
 4. Call the decorated function directly for a single case: `run = my_benchmark(param_a="x", param_b=1)`.
 5. Use `.sweep(cases=[...])` for many cases. **Each `.sweep()` call starts a fresh sweep.**
@@ -67,6 +68,52 @@ if __name__ == "__main__":
 7. Use `timeout=` on `.sweep()` to limit each case (seconds). Timed-out cases are recorded as failures.
 8. Use `bk.grid(...)` only for simple Cartesian products.
 9. Run benchmarks from Python scripts. The CLI is for inspection only.
+
+### Repetitions Pattern
+
+Every benchmark function should repeat measurements for statistical confidence. The function controls warmup and repetition count:
+
+```python
+import statistics
+
+
+@bk.func("compile-perf")
+def compile_perf(compiler: str, opt_level: str) -> None:
+    """Benchmark compile time with 5 repetitions after 1 warmup."""
+    # Warmup (not measured)
+    bk.run(
+        [compiler, f"-{opt_level}", "bench.c", "-o", "/dev/null"],
+        name="warmup",
+        timeout=120,
+    )
+
+    # Measured repetitions
+    times = []
+    for i in range(5):
+        result = bk.run(
+            [compiler, f"-{opt_level}", "bench.c", "-o", "/dev/null"],
+            name=f"rep-{i}",
+            timeout=120,
+        )
+        elapsed = parse_time(result.stdout)
+        times.append(elapsed)
+        bk.context().append_result({"rep": i, "time_ms": elapsed})
+
+    # Aggregate -- this is what appears in load_frame()
+    bk.context().save_result(
+        {
+            "time_ms_mean": statistics.mean(times),
+            "time_ms_std": statistics.stdev(times) if len(times) > 1 else 0.0,
+            "time_ms_min": min(times),
+            "time_ms_max": max(times),
+            "reps": len(times),
+        }
+    )
+```
+
+- `load_frame()` returns the aggregates (mean, std, min, max) -- ready for plotting
+- Raw samples are in `results.jsonl` in the artifact directory for deeper analysis
+- The benchmark function decides repetition count, warmup, and timing method
 
 ### Resume
 
