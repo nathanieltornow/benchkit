@@ -149,6 +149,8 @@ The journal is a private, append-only research log that lives outside the projec
 Experiment journal: <path-to-journal-file>
 ```
 
+If no journal path is configured, **ask the user** for one before running any experiment. Do not proceed without a journal path.
+
 **Before running an experiment:** read the journal to understand what was already tried. Do not repeat experiments without reason.
 
 **After every experiment:** append an entry. Include tables and figures when they help tell the story. Save figures next to the journal file (same directory).
