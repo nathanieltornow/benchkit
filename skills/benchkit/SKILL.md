@@ -51,13 +51,25 @@ analysis.save_figure(fig, plot_name="my-plot")
    - Write repeated internal samples with `bk.context().append_result({...})`.
    - Save all non-metric evidence as artifacts (`save_json`, `save_text`, `save_pickle`, `copy_file`).
 4. Call the decorated function directly for a single case: `run = my_benchmark(param_a="x", param_b=1)`.
-5. Use `.sweep(cases=[...])` for many cases.
-6. Use `.sweep(cases=[...], max_workers=N)` to run N cases in parallel. Uses `ProcessPoolExecutor` for real parallelism (falls back to threads if the function isn't picklable). Default is sequential (`max_workers=1`).
-7. Use explicit case lists as the main sweep API.
-8. Use `bk.grid(...)` only for simple Cartesian products.
-9. Sweeps are the only lineage mechanism. Resume is always on within the current sweep.
-10. Start a new sweep only when you want a fresh benchmark campaign.
-11. Run benchmarks from Python code. The CLI is for inspection only.
+5. Use `.sweep(cases=[...])` for many cases. Each `.sweep()` call starts a fresh sweep.
+6. Use `.sweep(cases=[...], max_workers=N)` for parallel execution. Uses `ProcessPoolExecutor` (falls back to threads if not picklable). Default is sequential.
+7. Use `timeout=` on `.sweep()` to limit each case (seconds). Timed-out cases are recorded as failures.
+8. To resume an interrupted sweep, pass `sweep=<sweep-id>` explicitly. Completed cases are skipped.
+9. Use `bk.grid(...)` only for simple Cartesian products.
+10. Run benchmarks from Python code. The CLI is for inspection only.
+
+## Script Conventions
+
+Every benchmark script MUST be self-documenting. The agent always writes benchmark scripts with:
+
+1. **A module docstring** explaining what the experiment measures and why.
+2. **Cases defined explicitly** with a comment per group explaining the parameter choices:
+   ```python
+   # Compare gcc and clang across optimization levels on the main benchmark source.
+   CASES = bk.grid(compiler=["gcc", "clang"], opt_level=["O0", "O1", "O2", "O3"])
+   ```
+3. **The benchmark function** with a docstring describing what it runs and what metrics it captures.
+4. **A rerun command** at the bottom as a comment: `# Rerun: uv run python benchmarks/compile_perf.py`
 
 ## Analysis Rules
 

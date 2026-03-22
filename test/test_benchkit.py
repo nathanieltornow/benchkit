@@ -27,7 +27,7 @@ def test_benchkit_home_defaults_to_project_local_directory(tmp_path: Path, monke
     assert benchkit_home() == project_dir / ".benchkit"
 
 
-def test_decorated_sweep_binds_analysis_tables_and_figures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sweep_runs_cases_and_produces_analysis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
     @bk.func("build-perf")
@@ -53,20 +53,18 @@ def test_decorated_sweep_binds_analysis_tables_and_figures(tmp_path: Path, monke
     assert all(path.exists() for path in figure_paths)
 
 
-def test_single_call_uses_current_sweep_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_single_call_returns_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
     @bk.func("single-case")
     def single_case(size: int) -> None:
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    first = single_case(size=8)
-    second = single_case(size=16)
+    run = single_case(size=8)
 
-    assert first.sweep_id == second.sweep_id
+    assert run.metrics == {"compile_time_ms": 8.0}
     analysis = bk.open_analysis("single-case")
     assert analysis.get_run(config={"size": 8}, status=bk.RunStatus.OK).metrics == {"compile_time_ms": 8.0}
-    assert analysis.get_run(config={"size": 16}, status=bk.RunStatus.OK).metrics == {"compile_time_ms": 16.0}
 
 
 def test_save_result_overwrites_and_append_result_keeps_samples(
@@ -111,9 +109,7 @@ def test_run_helper_captures_command_outputs_as_artifacts(tmp_path: Path, monkey
     assert metadata["returncode"] == 0
 
 
-def test_open_analysis_supports_reopening_without_function_definition(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_open_analysis_reopens_stored_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
     @bk.func("reopen-study")
@@ -186,20 +182,27 @@ def test_run_folders_are_nested_by_benchmark_and_sweep(tmp_path: Path, monkeypat
     assert relative.parts[:3] == ("runs", "nested-layout", "sweep-a")
 
 
-def test_completed_cases_are_skipped_in_same_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resume_skips_completed_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
     calls = {"count": 0}
 
     @bk.func("resume-benchmark")
     def resume_benchmark(size: int) -> None:
         calls["count"] += 1
-        bk.context().save_json("raw.json", {"size": size})
         bk.context().save_result({"compile_time_ms": float(size)})
 
-    resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
-    resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
+    # First sweep runs 2 cases
+    analysis = resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
+    sweep_id = analysis.sweep_id
 
-    assert calls["count"] == 2
+    # Resume the same sweep -- completed cases are skipped, new case runs
+    resume_benchmark.sweep(
+        cases=[{"size": 8}, {"size": 16}, {"size": 32}],
+        sweep=sweep_id,
+        show_progress=False,
+    )
+
+    assert calls["count"] == 3
 
 
 def test_open_analysis_defaults_to_latest_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,7 +213,7 @@ def test_open_analysis_defaults_to_latest_sweep(tmp_path: Path, monkeypatch: pyt
         bk.context().save_result({"compile_time_ms": float(size)})
 
     default_sweep_benchmark.sweep(cases=[{"size": 8}], sweep="sweep-a", show_progress=False)
-    default_sweep_benchmark.sweep(cases=[{"size": 16}], sweep="sweep-b", show_progress=False, new_sweep=True)
+    default_sweep_benchmark.sweep(cases=[{"size": 16}], sweep="sweep-b", show_progress=False)
 
     analysis = bk.open_analysis("default-sweep-benchmark")
     assert analysis.sweep == "sweep-b"
@@ -234,7 +237,7 @@ def test_failed_runs_expose_error_metadata(tmp_path: Path, monkeypatch: pytest.M
     assert run.error_message == "boom"
 
 
-def test_parallel_sweep_produces_same_results_as_sequential(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parallel_sweep_produces_correct_results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
     @bk.func("parallel-benchmark")
@@ -256,17 +259,18 @@ def test_parallel_sweep_produces_same_results_as_sequential(tmp_path: Path, monk
         assert run.metrics == {"compile_time_ms": float(run.config["size"])}
 
 
-def test_parallel_sweep_resumes_correctly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_each_sweep_call_starts_fresh_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
     calls = {"count": 0}
 
-    @bk.func("parallel-resume")
-    def parallel_resume(size: int) -> None:
+    @bk.func("fresh-sweep")
+    def fresh_sweep(size: int) -> None:
         calls["count"] += 1
         bk.context().save_result({"value": float(size)})
 
-    parallel_resume.sweep(cases=[{"size": 1}, {"size": 2}], show_progress=False, max_workers=2)
-    # Second call adds a case -- resumes latest sweep, skips size=1 and size=2
-    parallel_resume.sweep(cases=[{"size": 1}, {"size": 2}, {"size": 3}], show_progress=False, max_workers=2)
+    a1 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
+    a2 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
 
-    assert calls["count"] == 3
+    # Two separate sweeps, both ran the same case
+    assert a1.sweep_id != a2.sweep_id
+    assert calls["count"] == 2

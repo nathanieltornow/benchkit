@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 
 from .analysis import Analysis
 from .runner import SweepRunner
-from .store import default_store
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -70,22 +69,20 @@ class BenchFunction:
         self,
         *,
         cases: Sequence[Any],
-        new_sweep: bool = False,
         sweep: str | None = None,
         show_progress: bool = True,
         max_workers: int = 1,
         timeout: float | None = None,
     ) -> Analysis:
-        """Run an explicit case list in the current or a fresh sweep.
+        """Run an explicit case list.
 
-        By default, resumes the latest sweep for this benchmark (skipping
-        completed cases). Pass ``new_sweep=True`` to start fresh.
+        Each call starts a new sweep by default. To resume an interrupted sweep,
+        pass the sweep id explicitly with ``sweep=``.
 
         Args:
             cases: Explicit list of case dicts, dataclass instances, or objects.
-            new_sweep: Force a fresh sweep even if one exists.
-            sweep: Use a specific sweep id.
-            show_progress: Show a progress bar during execution.
+            sweep: Resume a specific sweep by id. Completed cases are skipped.
+            show_progress: Show progress during execution.
             max_workers: Number of concurrent worker processes. 1 = sequential.
             timeout: Maximum seconds per case. Cases exceeding this are recorded
                 as failures with ``TimeoutError``. None means no limit.
@@ -95,20 +92,13 @@ class BenchFunction:
         """
         normalized_cases = [_normalize_case(case) for case in cases]
 
-        if sweep is not None:
-            resolved_sweep = sweep
-        elif new_sweep:
-            resolved_sweep = None
-        else:
-            resolved_sweep = default_store().latest_sweep(self.id)
-
         runner = SweepRunner(
             id=self.id,
             fn=self.fn,
             cases=normalized_cases,
             show_progress=show_progress,
             max_workers=max_workers,
-            sweep=resolved_sweep,
+            sweep=sweep,
             timeout=timeout,
         )
         actual_sweep = runner.run()
