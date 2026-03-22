@@ -115,9 +115,20 @@ Never resume with changed code. Changed code = fresh sweep (the default).
 
 ## Workflow
 
-1. **Clarify** -- what is being measured and why. No experiments without clear intent.
+**Never run an experiment without clear intent.** Before writing any code, state what you are measuring, why, and what you expect to learn. After every experiment, explain what you found -- do not just dump numbers.
+
+1. **Intent** -- state what is being measured, why, and what outcome would be interesting. Get confirmation before proceeding if the goal is ambiguous.
 2. **Implement** -- self-documenting benchmark script in `benchmarks/`.
-3. **Execute** -- `.sweep(cases=...)`. Check `analysis.summary()`.
+3. **Execute** -- `.sweep(cases=...)`. Check `analysis.summary()` for failures.
 4. **Analyze** -- `load_frame()`, aggregate with pandas, check for anomalies.
 5. **Plot** -- publication-quality figures.
-6. **Report** -- clearly present findings, key metrics, and figures to the user.
+6. **Report** -- this is the most important step. Present a concise but complete summary:
+
+   - What was the goal?
+   - What cases were tested?
+   - What are the key findings? (concrete numbers, not vague statements)
+   - Are there surprises or anomalies?
+   - What should be investigated next?
+
+   Bad: "The results are in the database."
+   Good: "clang O3 compiles 2.1x faster than gcc O3 (12ms vs 25ms, std < 1ms across 5 reps). Both compilers show diminishing returns past O2. Next: test with LTO."
