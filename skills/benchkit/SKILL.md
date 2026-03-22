@@ -9,7 +9,7 @@ Python library for reproducible benchmark experiments. Orchestration is Python; 
 
 **Install:** `uv add git+https://github.com/nathanieltornow/benchkit@v0.0.1`
 
-**Every experiment must be journaled. Check `CLAUDE.md` for the journal path.**
+**Every experiment must be journaled. Journal path: `$BENCHKIT_JOURNAL`.**
 
 ## Project Layout
 
