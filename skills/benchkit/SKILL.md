@@ -133,16 +133,18 @@ Never resume with changed code. Changed code = fresh sweep (the default).
    Bad: "The results are in the database."
    Good: "clang O3 compiles 2.1x faster than gcc O3 (12ms vs 25ms, std < 1ms across 5 reps). Both compilers show diminishing returns past O2. Next: test with LTO."
 
-7. **Journal** -- if a journal file is configured (see below), append your findings. **Not optional when configured.**
+7. **Journal** -- append your findings to the journal. **Every experiment gets journaled. No exceptions.**
 
 ## Journal
+
+**Every experiment must be journaled. No exceptions. No deferring.**
 
 The journal is a private, append-only research log that lives outside the project repo. It records what was tried across all experiments so you (and future agents) can see the full history.
 
 **Configuration:** The project's `CLAUDE.md` must specify the journal path:
 
 ```markdown
-Experiment journal: ~/work/phd/journals/my-compiler.md
+Experiment journal: <path-to-journal-file>
 ```
 
 **Before running an experiment:** read the journal to understand what was already tried. Do not repeat experiments without reason.
