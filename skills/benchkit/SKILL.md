@@ -149,7 +149,7 @@ The journal is a private research log that lives outside the project repo. It us
 export BENCHKIT_JOURNAL=<path-to-journal-directory>
 ```
 
-If `BENCHKIT_JOURNAL` is not set, **ask the user** for the path before running any experiment.
+If `BENCHKIT_JOURNAL` is not set, **ask the user** for the journal directory path before running any experiment. Save it to a `.env` file in the project root (ensure `.env` is in `.gitignore`).
 
 **Directory structure:**
 
