@@ -17,7 +17,6 @@ my-project/
   benchmarks/                   # committed to git
     compile_perf.py
     JOURNAL.md                  # append-only experiment log
-    SUMMARY.md                  # current best results
   .benchkit/                    # gitignored (DB + artifacts)
 ```
 
@@ -115,15 +114,11 @@ analysis = my_benchmark.sweep(cases=CASES, sweep="20260322T143000000000Z")
 
 Never resume with changed code. Changed code = fresh sweep (the default).
 
-## Documentation -- MANDATORY
+## Journal -- MANDATORY
 
-**Every experiment gets documented. No exceptions. No deferring.**
+**Every experiment gets a journal entry. No exceptions. No deferring.**
 
-After every sweep, before reporting to the user, update both files:
-
-### Journal (`benchmarks/JOURNAL.md`)
-
-Append-only. Create with `# Experiment Journal` header on first use.
+After every sweep -- successful, partial, or failed -- append an entry to `benchmarks/JOURNAL.md` before reporting to the user. Create with `# Experiment Journal` header on first use.
 
 ```markdown
 ## compile-perf -- GCC vs Clang optimization levels
@@ -137,32 +132,15 @@ Append-only. Create with `# Experiment Journal` header on first use.
 **Key results:**
 
 - clang O3 is 2.1x faster than gcc O3 (mean 12ms vs 25ms)
-  **Rerun:** `uv run python benchmarks/compile_perf.py`
+
+**Rerun:** `uv run python benchmarks/compile_perf.py`
 ```
 
-### Summary (`benchmarks/SUMMARY.md`)
+Rules:
 
-Overwritten each time. Answers: "what do we know right now?"
-
-```markdown
-# Experiment Summary
-
-_Last updated: 2026-03-22_
-
-## Key findings
-
-- clang O3 is 2.1x faster than gcc O3
-
-## Best configurations
-
-| Metric       | Best | Config   | Benchmark    |
-| ------------ | ---- | -------- | ------------ |
-| compile time | 12ms | clang O3 | compile-perf |
-
-## Open questions
-
-- Test with LTO enabled
-```
+- Always append, never delete. Failed experiments get an entry too.
+- Write after the sweep completes, not before. Include actual results.
+- One sentence per finding. Link to figures, don't inline tables.
 
 ## Workflow
 
@@ -173,5 +151,4 @@ _Last updated: 2026-03-22_
 3. **Execute** -- `.sweep(cases=...)`. Check `analysis.summary()`.
 4. **Analyze** -- `load_frame()`, compute summaries.
 5. **Plot** -- publication-quality figures.
-6. **Journal** -- append entry. **Not optional.**
-7. **Summary** -- update. **Not optional.**
+6. **Journal** -- append entry to `benchmarks/JOURNAL.md`. **Not optional.**
