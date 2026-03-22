@@ -265,7 +265,26 @@ def test_parallel_sweep_resumes_correctly(tmp_path: Path, monkeypatch: pytest.Mo
         calls["count"] += 1
         bk.context().save_result({"value": float(size)})
 
-    parallel_resume.sweep(cases=[{"size": 1}, {"size": 2}], show_progress=False, max_workers=2)
-    parallel_resume.sweep(cases=[{"size": 1}, {"size": 2}, {"size": 3}], show_progress=False, max_workers=2)
+    # Same cases twice -- second call resumes and skips completed
+    cases = [{"size": 1}, {"size": 2}, {"size": 3}]
+    parallel_resume.sweep(cases=cases, show_progress=False, max_workers=2)
+    parallel_resume.sweep(cases=cases, show_progress=False, max_workers=2)
 
     assert calls["count"] == 3
+
+
+def test_different_cases_get_different_sweeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
+    calls = {"count": 0}
+
+    @bk.func("different-cases")
+    def different_cases(size: int) -> None:
+        calls["count"] += 1
+        bk.context().save_result({"value": float(size)})
+
+    a1 = different_cases.sweep(cases=[{"size": 1}, {"size": 2}], show_progress=False)
+    a2 = different_cases.sweep(cases=[{"size": 1}, {"size": 2}, {"size": 3}], show_progress=False)
+
+    # Different case lists = different sweeps = all cases run
+    assert a1.sweep_id != a2.sweep_id
+    assert calls["count"] == 5
