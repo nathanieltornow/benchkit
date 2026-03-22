@@ -33,26 +33,24 @@ my-project/
 import benchkit as bk
 
 
-# 1. Define
 @bk.func("my-benchmark")
 def my_benchmark(param_a: str, param_b: int) -> None:
     result = bk.run(["./my_tool", param_a, str(param_b)], name="tool", timeout=300)
     bk.context().save_result({"metric": parse_metric(result.stdout)})
 
 
-# 2. Execute
-analysis = my_benchmark.sweep(cases=CASES, max_workers=4, timeout=300)
+CASES = [{"param_a": "x", "param_b": 1}, {"param_a": "y", "param_b": 2}]
 
-# 3. Analyze
-df = analysis.load_frame()
-run = analysis.get_run(config={...}, status=bk.RunStatus.OK)
-
-# 4. Plot
-with bk.pplot(preset="double-column", latex=True):
-    fig, ax = plt.subplots()
-    ...
-analysis.save_figure(fig, plot_name="my-plot")
+if __name__ == "__main__":
+    analysis = my_benchmark.sweep(cases=CASES, max_workers=4, timeout=300)
+    df = analysis.load_frame()
+    with bk.pplot(preset="double-column", latex=True):
+        fig, ax = plt.subplots()
+        ...
+    analysis.save_figure(fig, plot_name="my-plot")
 ```
+
+**Important:** Always put `.sweep()`, analysis, and plotting inside `if __name__ == "__main__":`. This is required for `max_workers > 1` because `ProcessPoolExecutor` re-imports the module in child processes.
 
 ## Execution Rules
 
@@ -100,7 +98,8 @@ Every benchmark script MUST be self-documenting. Always write scripts with:
    CASES = bk.grid(compiler=["gcc", "clang"], opt_level=["O0", "O1", "O2", "O3"])
    ```
 3. **The benchmark function** with a docstring describing what it runs and what metrics it captures.
-4. **A rerun command** at the bottom: `# Rerun: uv run python benchmarks/compile_perf.py`
+4. **A `if __name__ == "__main__":` block** for all execution, analysis, and plotting. Required for `max_workers > 1`.
+5. **A rerun command** at the bottom: `# Rerun: uv run python benchmarks/compile_perf.py`
 
 ## Analysis Rules
 
