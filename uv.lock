@@ -94,7 +94,6 @@ dependencies = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "pyarrow" },
-    { name = "rich" },
     { name = "typer" },
 ]
 
@@ -137,7 +136,6 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.9.4" },
     { name = "pandas", specifier = ">=2.3.1" },
     { name = "pyarrow", specifier = ">=21.0.0" },
-    { name = "rich", specifier = ">=14.1.0" },
     { name = "typer", specifier = ">=0.16.0" },
 ]
 

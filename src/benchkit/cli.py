@@ -8,15 +8,11 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from rich.console import Console
-from rich.table import Table
 
 from .store import default_store
 
-console = Console()
 app = typer.Typer(help="Inspect BenchKit sweeps and runs.")
 
-# Skills bundled with the package.
 _SKILLS = ["benchkit", "benchkit-plot"]
 
 
@@ -30,7 +26,7 @@ def _skills_dir() -> Path:
 
 
 def _format_config(config: dict[str, Any], max_len: int = 48) -> str:
-    """Format a compact config preview for tables.
+    """Format a compact config preview.
 
     Returns:
         str: Truncated config string.
@@ -40,7 +36,7 @@ def _format_config(config: dict[str, Any], max_len: int = 48) -> str:
 
 
 def _format_metrics(metrics: Any, max_len: int = 56) -> str:  # noqa: ANN401
-    """Format a compact metrics preview for tables.
+    """Format a compact metrics preview.
 
     Returns:
         str: Truncated metrics string.
@@ -60,17 +56,12 @@ def sweeps_list(
     """
     records = default_store().list_sweeps(benchmark=benchmark_id)
     if not records:
-        console.print("[dim]No sweeps found.[/dim]")
+        typer.echo("No sweeps found.")
         raise typer.Exit
 
-    table = Table(title="sweeps", title_justify="left", box=None, show_edge=False, pad_edge=False, expand=True)
-    table.add_column("Benchmark", header_style="dim")
-    table.add_column("Sweep", header_style="dim")
-    table.add_column("Runs", justify="right", header_style="dim")
-    table.add_column("Created", header_style="dim")
+    typer.echo(f"{'Benchmark':<24} {'Sweep':<28} {'Runs':>5}  {'Created'}")
     for row in records:
-        table.add_row(row["benchmark"], row["sweep"], str(row["count"]), row["created_at"])
-    console.print(table)
+        typer.echo(f"{row['benchmark']:<24} {row['sweep']:<28} {row['count']:>5}  {row['created_at']}")
 
 
 @app.command("runs")  # type: ignore[misc]  # typer decorator
@@ -86,7 +77,7 @@ def runs_list(
     """
     resolved_sweep = sweep or default_store().latest_sweep(benchmark_id)
     if resolved_sweep is None:
-        console.print("[dim]No sweeps found.[/dim]")
+        typer.echo("No sweeps found.")
         raise typer.Exit
 
     rows = default_store().query_runs(
@@ -95,28 +86,18 @@ def runs_list(
         status=status,
     )
     if not rows:
-        console.print("[dim]No runs found.[/dim]")
+        typer.echo("No runs found.")
         raise typer.Exit
 
-    table = Table(title="runs", title_justify="left", box=None, show_edge=False, pad_edge=False, expand=True)
-    table.add_column("Sweep", header_style="dim")
-    table.add_column("Status", header_style="dim")
-    table.add_column("Config", header_style="dim")
-    table.add_column("Metrics", header_style="dim")
-    table.add_column("Created", header_style="dim")
+    typer.echo(f"{'Status':<12} {'Config':<48} {'Metrics'}")
     for row in rows:
         error = row.get("error")
         status_str = row["status"]
         if isinstance(error, dict):
-            status_str = f"{status_str} ({error.get('type', '')})"
-        table.add_row(
-            row["sweep"],
-            status_str,
-            _format_config(row.get("config", {})),
-            _format_metrics(row.get("metrics", {})),
-            row.get("created_at", ""),
+            status_str = f"{status_str}({error.get('type', '')})"
+        typer.echo(
+            f"{status_str:<12} {_format_config(row.get('config', {})):<48} {_format_metrics(row.get('metrics', {}))}"
         )
-    console.print(table)
 
 
 @app.command()  # type: ignore[misc]  # typer decorator
@@ -133,7 +114,7 @@ def init(
     """
     target_dir = Path(target).resolve() if target else Path.cwd()
     if not target_dir.is_dir():
-        console.print(f"[red]Directory {target_dir} does not exist.[/red]")
+        typer.echo(f"Directory {target_dir} does not exist.")
         raise typer.Exit(1)
 
     for skill_name in _SKILLS:
@@ -159,18 +140,18 @@ def _install_skill(skill_name: str, dest_dir: Path) -> None:
     """
     source = _skills_dir() / skill_name / "SKILL.md"
     if not source.exists():
-        console.print(f"[red]Could not find bundled skill {skill_name!r}.[/red]")
+        typer.echo(f"Could not find bundled skill {skill_name!r}.")
         raise typer.Exit(1)
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "SKILL.md"
 
     if dest.exists() and dest.read_text(encoding="utf-8") == source.read_text(encoding="utf-8"):
-        console.print(f"[dim]{dest} is already up to date.[/dim]")
+        typer.echo(f"{dest} is already up to date.")
         return
 
     shutil.copy2(source, dest)
-    console.print(f"[green]Installed {skill_name} skill to {dest}[/green]")
+    typer.echo(f"Installed {skill_name} skill to {dest}")
 
 
 def main() -> None:

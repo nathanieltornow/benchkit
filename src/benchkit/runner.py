@@ -6,12 +6,9 @@ import concurrent.futures
 import datetime as dt
 import pickle  # noqa: S403
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from .logging import RunStatus, capture_env
 from .runtime import RunContext, activated_context
@@ -184,30 +181,27 @@ class SweepRunner:
         sweep_id: str,
         store: BenchkitStore,
     ) -> None:
-        progress_cm = self._progress(len(cases))
-        with progress_cm as progress:
-            task_id = progress.add_task(f"[cyan]{self.id}", total=len(cases)) if progress is not None else None
-            for case in cases:
-                art_dir = str(
-                    store.artifact_dir_for(
-                        benchmark=self.id,
-                        sweep=sweep_id,
-                        case_key=case.case_key,
-                    )
-                )
-                result = _run_case_in_worker(
-                    self.fn,
-                    case.config,
-                    case.case_key,
+        total = len(cases)
+        for i, case in enumerate(cases):
+            art_dir = str(
+                store.artifact_dir_for(
                     benchmark=self.id,
                     sweep=sweep_id,
-                    artifact_dir=art_dir,
-                    db_path=str(store.path),
+                    case_key=case.case_key,
                 )
-                if result.error is not None and not self.continue_on_failure:
-                    raise result.error
-                if progress is not None and task_id is not None:
-                    progress.advance(task_id)
+            )
+            result = _run_case_in_worker(
+                self.fn,
+                case.config,
+                case.case_key,
+                benchmark=self.id,
+                sweep=sweep_id,
+                artifact_dir=art_dir,
+                db_path=str(store.path),
+            )
+            if result.error is not None and not self.continue_on_failure:
+                raise result.error
+            self._log_progress(i + 1, total, self.id)
 
     def _run_with_pool(
         self,
@@ -218,15 +212,37 @@ class SweepRunner:
     ) -> None:
         pool_class = self._pick_pool_class()
         workers = max(self.max_workers, 1)
+        label = self.id if workers == 1 else f"{self.id} ({workers}w)"
+        total = len(cases)
+        done = 0
 
-        progress_cm = self._progress(len(cases))
-        with progress_cm as progress:
-            label = f"[cyan]{self.id}" if workers == 1 else f"[cyan]{self.id} ({workers}w)"
-            task_id = progress.add_task(label, total=len(cases)) if progress is not None else None
+        with pool_class(max_workers=workers) as pool:
+            futures: dict[concurrent.futures.Future[_CaseResult], _Case] = {}
+            for case in cases:
+                art_dir = str(
+                    store.artifact_dir_for(
+                        benchmark=self.id,
+                        sweep=sweep_id,
+                        case_key=case.case_key,
+                    )
+                )
+                future = pool.submit(
+                    _run_case_in_worker,
+                    self.fn,
+                    case.config,
+                    case.case_key,
+                    benchmark=self.id,
+                    sweep=sweep_id,
+                    artifact_dir=art_dir,
+                    db_path=str(store.path),
+                )
+                futures[future] = case
 
-            with pool_class(max_workers=workers) as pool:
-                futures: dict[concurrent.futures.Future[_CaseResult], _Case] = {}
-                for case in cases:
+            for future in as_completed(futures):
+                case = futures[future]
+                try:
+                    result = future.result(timeout=self.timeout)
+                except (TimeoutError, concurrent.futures.TimeoutError):
                     art_dir = str(
                         store.artifact_dir_for(
                             benchmark=self.id,
@@ -234,43 +250,19 @@ class SweepRunner:
                             case_key=case.case_key,
                         )
                     )
-                    future = pool.submit(
-                        _run_case_in_worker,
-                        self.fn,
-                        case.config,
-                        case.case_key,
+                    result = _handle_timeout(
+                        case,
+                        timeout=self.timeout or 0,
                         benchmark=self.id,
                         sweep=sweep_id,
                         artifact_dir=art_dir,
                         db_path=str(store.path),
                     )
-                    futures[future] = case
-
-                for future in as_completed(futures):
-                    case = futures[future]
-                    try:
-                        result = future.result(timeout=self.timeout)
-                    except (TimeoutError, concurrent.futures.TimeoutError):
-                        art_dir = str(
-                            store.artifact_dir_for(
-                                benchmark=self.id,
-                                sweep=sweep_id,
-                                case_key=case.case_key,
-                            )
-                        )
-                        result = _handle_timeout(
-                            case,
-                            timeout=self.timeout or 0,
-                            benchmark=self.id,
-                            sweep=sweep_id,
-                            artifact_dir=art_dir,
-                            db_path=str(store.path),
-                        )
-                    if result.error is not None and not self.continue_on_failure:
-                        pool.shutdown(wait=False, cancel_futures=True)
-                        raise result.error
-                    if progress is not None and task_id is not None:
-                        progress.advance(task_id)
+                if result.error is not None and not self.continue_on_failure:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    raise result.error
+                done += 1
+                self._log_progress(done, total, label)
 
     def _pick_pool_class(self) -> type[ProcessPoolExecutor | ThreadPoolExecutor]:
         """Choose the best executor class.
@@ -293,17 +285,11 @@ class SweepRunner:
                 case_key=case_key(benchmark_name=self.id, config=normalized),
             )
 
-    def _progress(self, total: int) -> Progress | nullcontext[None]:
-        if not self.show_progress or total == 0:
-            return nullcontext(None)
-        return Progress(
-            SpinnerColumn(),
-            TextColumn(f"[bold]{self.id}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            transient=True,
-        )
+    def _log_progress(self, done: int, total: int, label: str) -> None:
+        if self.show_progress:
+            print(f"\r{label}: {done}/{total}", end="", flush=True)  # noqa: T201
+            if done == total:
+                print(flush=True)  # noqa: T201
 
 
 def _generate_sweep_id() -> str:
