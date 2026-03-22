@@ -69,14 +69,11 @@ if __name__ == "__main__":
 8. Use `bk.grid(...)` only for simple Cartesian products.
 9. Run benchmarks from Python scripts. The CLI is for inspection only.
 
-### Repetitions Pattern
+### Repetitions
 
-Every benchmark function should repeat measurements for statistical confidence. The function controls warmup and repetition count:
+Every benchmark function should repeat measurements for statistical confidence. Each `save_result()` call writes a separate row to the database with an incrementing repetition counter:
 
 ```python
-import statistics
-
-
 @bk.func("compile-perf")
 def compile_perf(compiler: str, opt_level: str) -> None:
     """Benchmark compile time with 5 repetitions after 1 warmup."""
@@ -87,8 +84,7 @@ def compile_perf(compiler: str, opt_level: str) -> None:
         timeout=120,
     )
 
-    # Measured repetitions
-    times = []
+    # Measured repetitions -- each save_result() writes one row
     for i in range(5):
         result = bk.run(
             [compiler, f"-{opt_level}", "bench.c", "-o", "/dev/null"],
@@ -96,24 +92,22 @@ def compile_perf(compiler: str, opt_level: str) -> None:
             timeout=120,
         )
         elapsed = parse_time(result.stdout)
-        times.append(elapsed)
-        bk.context().append_result({"rep": i, "time_ms": elapsed})
-
-    # Aggregate -- this is what appears in load_frame()
-    bk.context().save_result(
-        {
-            "time_ms_mean": statistics.mean(times),
-            "time_ms_std": statistics.stdev(times) if len(times) > 1 else 0.0,
-            "time_ms_min": min(times),
-            "time_ms_max": max(times),
-            "reps": len(times),
-        }
-    )
+        bk.context().save_result({"rep": i, "time_ms": elapsed})
 ```
 
-- `load_frame()` returns the aggregates (mean, std, min, max) -- ready for plotting
-- Raw samples are in `results.jsonl` in the artifact directory for deeper analysis
-- The benchmark function decides repetition count, warmup, and timing method
+`load_frame()` returns all rows (5 per case). Aggregate in pandas:
+
+```python
+df = analysis.load_frame()
+summary = df.groupby(["config.compiler", "config.opt_level"]).agg(
+    time_mean=("result.time_ms", "mean"),
+    time_std=("result.time_ms", "std"),
+)
+```
+
+- The benchmark function controls warmup, repetition count, and timing
+- All repetitions are in the DB -- no separate files
+- Aggregate in pandas, not in the benchmark function
 
 ### Resume
 

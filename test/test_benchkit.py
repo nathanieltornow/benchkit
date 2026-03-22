@@ -67,26 +67,24 @@ def test_single_call_returns_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert analysis.get_run(config={"size": 8}, status=bk.RunStatus.OK).metrics == {"compile_time_ms": 8.0}
 
 
-def test_save_result_overwrites_and_append_result_keeps_samples(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_multiple_save_result_creates_repetitions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
-    @bk.func("sample-logging")
-    def sampled(size: int) -> None:
-        bk.context().append_result({"sample_ms": size + 1})
-        bk.context().append_result({"sample_ms": size + 2})
-        bk.context().save_result({"compile_time_ms": float(size)})
-        bk.context().save_result({"compile_time_ms": float(size + 10)})
+    @bk.func("repetitions")
+    def repeated(size: int) -> None:
+        for i in range(3):
+            bk.context().save_result({"rep": i, "time_ms": float(size + i)})
 
-    run = sampled(size=8)
+    analysis = repeated.sweep(cases=[{"size": 8}], show_progress=False)
+    runs = analysis.load_runs(status=bk.RunStatus.OK)
 
-    assert run.metrics == {"compile_time_ms": 18.0}
-    assert run.load_json("metrics.json") == {"compile_time_ms": 18.0}
-    assert run.path("results.jsonl").read_text(encoding="utf-8").splitlines() == [
-        '{"sample_ms": 9}',
-        '{"sample_ms": 10}',
-    ]
+    assert len(runs) == 3
+    assert [r.rep for r in runs] == [0, 1, 2]
+    assert [r.metrics["time_ms"] for r in runs] == [8.0, 9.0, 10.0]
+
+    frame = analysis.load_frame()
+    assert len(frame) == 3
+    assert list(frame["rep"]) == [0, 1, 2]
 
 
 def test_run_helper_captures_command_outputs_as_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

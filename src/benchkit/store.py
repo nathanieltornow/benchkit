@@ -58,6 +58,7 @@ class BenchkitStore:
                     benchmark TEXT NOT NULL,
                     sweep TEXT NOT NULL,
                     case_key TEXT NOT NULL,
+                    rep INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL,
                     config TEXT NOT NULL,
                     metrics TEXT NOT NULL,
@@ -65,7 +66,7 @@ class BenchkitStore:
                     error TEXT,
                     env TEXT,
                     created_at TEXT NOT NULL,
-                    PRIMARY KEY (benchmark, sweep, case_key)
+                    PRIMARY KEY (benchmark, sweep, case_key, rep)
                 )
                 """,
             )
@@ -84,6 +85,7 @@ class BenchkitStore:
         benchmark: str,
         sweep: str,
         case_key: str,
+        rep: int = 0,
         status: str,
         config: dict[str, Any],
         metrics: dict[str, Any],
@@ -92,19 +94,20 @@ class BenchkitStore:
         env: dict[str, Any] | None = None,
     ) -> None:
         """Insert or replace one run row."""
-        now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO runs
-                    (benchmark, sweep, case_key, status, config, metrics,
+                    (benchmark, sweep, case_key, rep, status, config, metrics,
                      artifact_dir, error, env, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     benchmark,
                     sweep,
                     case_key,
+                    rep,
                     status,
                     json.dumps(config, default=str, sort_keys=True),
                     json.dumps(metrics, default=str, sort_keys=True),
@@ -116,14 +119,14 @@ class BenchkitStore:
             )
 
     def completed_keys(self, *, benchmark: str, sweep: str) -> set[str]:
-        """Return case keys that completed successfully.
+        """Return case keys that have at least one successful run.
 
         Returns:
             set[str]: The set of completed case keys.
         """
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT case_key FROM runs WHERE benchmark = ? AND sweep = ? AND status = 'ok'",
+                "SELECT DISTINCT case_key FROM runs WHERE benchmark = ? AND sweep = ? AND status = 'ok'",
                 (benchmark, sweep),
             ).fetchall()
         return {row[0] for row in rows}
@@ -158,7 +161,7 @@ class BenchkitStore:
         if status is not None:
             query += " AND status = ?"
             params.append(status)
-        query += " ORDER BY created_at ASC"
+        query += " ORDER BY case_key ASC, rep ASC"
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, params).fetchall()

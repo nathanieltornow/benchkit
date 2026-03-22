@@ -38,6 +38,7 @@ class RunRecord:
     benchmark: str
     sweep: str
     case_key: str
+    rep: int
     status: RunStatus
     config: dict[str, Any]
     metrics: dict[str, Any]
@@ -63,6 +64,11 @@ class Run:
     def case_key(self) -> str:
         """Return the case key hash."""
         return self.record.case_key
+
+    @property
+    def rep(self) -> int:
+        """Return the repetition index."""
+        return self.record.rep
 
     @property
     def status(self) -> RunStatus:
@@ -167,6 +173,7 @@ def run_from_row(row: dict[str, Any]) -> Run:
             benchmark=row["benchmark"],
             sweep=row["sweep"],
             case_key=row["case_key"],
+            rep=int(row.get("rep", 0)),
             status=RunStatus.parse(row["status"]),
             config=row.get("config", {}),
             metrics=row.get("metrics", {}),

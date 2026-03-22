@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .logging import RunStatus, capture_env
+from .store import BenchkitStore
+
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
@@ -28,31 +31,23 @@ class CommandResult:
 
 @dataclass(slots=True)
 class RunContext:
-    """Per-case benchmark runtime context for storing artifacts."""
+    """Per-case benchmark runtime context for storing artifacts and results."""
 
     sweep_id: str
     case_key: str
     benchmark_id: str
     artifact_dir_path: Path
+    db_path: str
     config: dict[str, Any] = field(default_factory=dict)
-    result_row: dict[str, Any] = field(default_factory=dict)
     records: list[dict[str, Any]] = field(default_factory=list)
+    _rep: int = 0
+    _has_result: bool = False
 
     @property
     def artifact_dir(self) -> Path:
         """Return the artifact directory, creating it if needed."""
         self.artifact_dir_path.mkdir(parents=True, exist_ok=True)
         return self.artifact_dir_path
-
-    @property
-    def metrics_path(self) -> Path:
-        """Return the metrics file path."""
-        return self.artifact_dir / "metrics.json"
-
-    @property
-    def results_log_path(self) -> Path:
-        """Return the results log file path."""
-        return self.artifact_dir / "results.jsonl"
 
     def path_for(self, name: str) -> Path:
         """Return a path for a named artifact."""
@@ -126,31 +121,30 @@ class RunContext:
         """
         return self.copy_file(source, name=name)
 
-    def save_result(self, value: dict[str, Any]) -> dict[str, Any]:
-        """Save the primary result metrics for this run.
+    def save_result(self, metrics: dict[str, Any]) -> dict[str, Any]:
+        """Save one result row to the database.
+
+        Each call writes a separate row with an incrementing repetition counter.
+        Call this once per repetition inside the benchmark function.
 
         Returns:
             dict[str, Any]: A copy of the saved metrics.
         """
-        self.result_row = dict(value)
-        self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        self.metrics_path.write_text(
-            json.dumps(self.result_row, default=str, sort_keys=True, indent=2),
-            encoding="utf-8",
+        store = BenchkitStore(path=Path(self.db_path))
+        store.insert_run(
+            benchmark=self.benchmark_id,
+            sweep=self.sweep_id,
+            case_key=self.case_key,
+            rep=self._rep,
+            status=RunStatus.OK.value,
+            config=self.config,
+            metrics=metrics,
+            artifact_dir=str(self.artifact_dir_path),
+            env=capture_env(),
         )
-        return dict(self.result_row)
-
-    def append_result(self, value: dict[str, Any]) -> dict[str, Any]:
-        """Append a result row to the results log.
-
-        Returns:
-            dict[str, Any]: A copy of the appended row.
-        """
-        row = dict(value)
-        self.results_log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.results_log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, default=str, sort_keys=True) + "\n")
-        return row
+        self._rep += 1
+        self._has_result = True
+        return dict(metrics)
 
     def _record(self, path: Path, *, kind: str) -> None:
         self.records.append({

@@ -82,6 +82,7 @@ class Analysis:
             for k, v in row.get("metrics", {}).items():
                 flat[f"result.{k}"] = v
             flat["status"] = row["status"]
+            flat["rep"] = row.get("rep", 0)
             flat["case_key"] = row["case_key"]
             flat["created_at"] = row.get("created_at")
             flat["artifact_dir"] = row.get("artifact_dir")
