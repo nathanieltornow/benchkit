@@ -5,7 +5,7 @@ Benchmark sweeps with parallel execution and resume support. Works with any work
 ## Install
 
 ```bash
-uv add --group bench git+https://github.com/nathanieltornow/benchkit@v0.0.1
+uv add --group bench git+https://github.com/nathanieltornow/benchkit@v0.0.2
 ```
 
 ## Example
@@ -27,12 +27,9 @@ def compile_benchmark(compiler: str, opt_level: str) -> None:
 CASES = bk.grid(compiler=["gcc", "clang"], opt_level=["O0", "O2", "O3"])
 
 # Run all cases
-analysis = compile_benchmark.sweep(cases=CASES, max_workers=4, timeout=300)
+compile_benchmark.sweep(cases=CASES, max_workers=4, timeout=300)
 
 # Get results as a DataFrame
-df = analysis.load_frame()
-
-# Or load from a different script
 df = bk.load_frame("compile-benchmark")
 ```
 

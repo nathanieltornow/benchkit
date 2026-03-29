@@ -37,9 +37,9 @@ CASES = bk.grid(algorithm=["timsort", "mergesort"], size=[1000, 10000, 100000])
 
 def main() -> None:
     """Run the example benchmark sweep and print the results."""
-    analysis = sort_comparison.sweep(cases=CASES, show_progress=False)
-    df = analysis.load_frame()
-    print(df.to_string(index=False))
+    sort_comparison.sweep(cases=CASES, show_progress=False)
+    frame = bk.load_frame("sort-comparison")
+    print(frame.to_string(index=False))
 
 
 if __name__ == "__main__":

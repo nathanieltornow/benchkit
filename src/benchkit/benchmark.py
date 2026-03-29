@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from itertools import product
 from typing import TYPE_CHECKING, Any
 
-from .analysis import Analysis
+from .analysis import get_run
 from .runner import SweepRunner
 from .store import default_store
 
@@ -64,8 +64,8 @@ class BenchFunction:
             Run: The completed run.
         """
         case = self._bind_case(*args, **kwargs)
-        analysis = self.sweep(cases=[case], show_progress=False)
-        return analysis.get_run(config=case)
+        sweep_id = self.sweep(cases=[case], show_progress=False)
+        return get_run(self.id, config=case, sweep=sweep_id)
 
     def sweep(
         self,
@@ -75,7 +75,7 @@ class BenchFunction:
         max_workers: int = 1,
         timeout: float | None = None,
         resume: bool = False,
-    ) -> Analysis:
+    ) -> str:
         """Run an explicit case list.
 
         By default, starts a fresh sweep. Pass ``resume=True`` or set
@@ -92,7 +92,7 @@ class BenchFunction:
                 Also enabled by ``BENCHKIT_RESUME=1``.
 
         Returns:
-            Analysis: Read-only handle for the completed sweep.
+            str: The sweep identifier.
         """
         normalized_cases = [_normalize_case(case) for case in cases]
         should_resume = resume or os.environ.get("BENCHKIT_RESUME", "").strip() == "1"
@@ -108,8 +108,7 @@ class BenchFunction:
             sweep=resolved_sweep,
             timeout=timeout,
         )
-        actual_sweep = runner.run()
-        return Analysis(id=self.id, sweep=actual_sweep)
+        return runner.run()
 
     def _bind_case(self, *args: object, **kwargs: object) -> dict[str, Any]:
         bound = inspect.signature(self.fn).bind(*args, **kwargs)
