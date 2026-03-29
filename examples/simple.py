@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import matplotlib.pyplot as plt
-
 import benchkit as bk
 
 
@@ -38,21 +36,10 @@ CASES = bk.grid(algorithm=["timsort", "mergesort"], size=[1000, 10000, 100000])
 
 
 def main() -> None:
-    """Run the example benchmark sweep and plot the results."""
+    """Run the example benchmark sweep and print the results."""
     analysis = sort_comparison.sweep(cases=CASES, show_progress=False)
     df = analysis.load_frame()
-
-    with bk.pplot():
-        FIGURE_WIDTH_MM = 180.0
-        FIGURE_HEIGHT_MM = 45.0
-        fig, ax = plt.subplots(figsize=(FIGURE_WIDTH_MM / 25.4, FIGURE_HEIGHT_MM / 25.4))
-        summary_df = df.groupby("config.size", as_index=False)[["result.elapsed_ms"]].mean()
-        ax.plot(summary_df["config.size"], summary_df["result.elapsed_ms"], marker="o")
-        ax.set_xlabel("Array size")
-        ax.set_ylabel("Time (ms)")
-
-    analysis.save_figure(fig, plot_name="sort-comparison")
-    analysis.save_dataframe(df, "raw-results", file_format="csv")
+    print(df.to_string(index=False))
 
 
 if __name__ == "__main__":

@@ -7,12 +7,11 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from .config import benchkit_home
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from .models import Run, RunStatus, SweepSummary
 
 
 def store_path() -> Path:
@@ -150,11 +149,11 @@ class BenchkitStore:
         benchmark: str,
         sweep: str,
         status: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Query run rows with JSON fields parsed.
+    ) -> list[Run]:
+        """Query run rows as typed records.
 
         Returns:
-            list[dict[str, Any]]: The matching run rows.
+            list[Run]: The matching run records.
         """
         query = "SELECT * FROM runs WHERE benchmark = ? AND sweep = ?"
         params: list[Any] = [benchmark, sweep]
@@ -165,13 +164,13 @@ class BenchkitStore:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, params).fetchall()
-        return [self._parse_row(dict(row)) for row in rows]
+        return [self._record_from_row(dict(row)) for row in rows]
 
-    def list_sweeps(self, benchmark: str | None = None) -> list[dict[str, Any]]:
+    def list_sweeps(self, benchmark: str | None = None) -> list[SweepSummary]:
         """List distinct sweeps with counts.
 
         Returns:
-            list[dict[str, Any]]: The sweep summary rows.
+            list[SweepSummary]: The sweep summaries.
         """
         query = """
             SELECT benchmark, sweep, MIN(created_at) as created_at, COUNT(*) as count
@@ -185,7 +184,7 @@ class BenchkitStore:
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
+        return [SweepSummary(**dict(row)) for row in rows]
 
     @staticmethod
     def artifact_dir_for(*, benchmark: str, sweep: str, case_key: str) -> Path:
@@ -199,22 +198,34 @@ class BenchkitStore:
         return path
 
     @staticmethod
-    def _parse_row(row: dict[str, Any]) -> dict[str, Any]:
-        """Parse JSON columns in a raw DB row.
+    def _record_from_row(row: dict[str, Any]) -> Run:
+        """Parse a raw DB row into a typed Run.
 
         Returns:
-            dict[str, Any]: The row with parsed JSON fields.
+            Run: The parsed run.
         """
-        for col in ("config", "metrics"):
-            if isinstance(row.get(col), str):
-                row[col] = json.loads(row[col])
-        for col in ("error", "env"):
-            val = row.get(col)
-            if isinstance(val, str):
-                row[col] = json.loads(val)
-            elif val is None:
-                row[col] = None
-        return row
+        config = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
+        metrics = json.loads(row["metrics"]) if isinstance(row["metrics"], str) else row["metrics"]
+        error_raw = row.get("error")
+        error = json.loads(error_raw) if isinstance(error_raw, str) else error_raw
+        env_raw = row.get("env")
+        env = json.loads(env_raw) if isinstance(env_raw, str) else env_raw
+        artifact_dir_raw = row.get("artifact_dir")
+
+        return Run(
+            benchmark=row["benchmark"],
+            sweep=row["sweep"],
+            case_key=row["case_key"],
+            rep=int(row.get("rep", 0)),
+            status=RunStatus.parse(row["status"]),
+            config=config,
+            metrics=metrics,
+            artifact_dir=Path(artifact_dir_raw) if artifact_dir_raw else None,
+            error_type=error["type"] if isinstance(error, dict) else None,
+            error_message=error["message"] if isinstance(error, dict) else None,
+            env=env or {},
+            created_at=row.get("created_at", ""),
+        )
 
 
 _DEFAULT_STORE: BenchkitStore | None = None

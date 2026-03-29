@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import pytest
 
 import benchkit as bk
@@ -37,20 +36,10 @@ def test_sweep_runs_cases_and_produces_analysis(tmp_path: Path, monkeypatch: pyt
 
     analysis = build_perf.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
     frame = analysis.load_frame()
-    table_path = analysis.save_dataframe(frame, "results")
 
-    with bk.pplot():
-        fig, ax = plt.subplots()
-        summary_df = frame.groupby("config.size", as_index=False)[["result.compile_time_ms"]].mean()
-        ax.plot(summary_df["config.size"], summary_df["result.compile_time_ms"], marker="o")
-
-    figure_paths = analysis.save_figure(fig, plot_name="build-perf")
-    plt.close(fig)
-
-    assert table_path == analysis._data_dir / "results.csv"
-    assert table_path.exists()
-    assert len(figure_paths) == 2
-    assert all(path.exists() for path in figure_paths)
+    assert len(frame) == 2
+    assert set(frame.columns) >= {"config.size", "result.compile_time_ms", "result.throughput", "status"}
+    assert sorted(frame["config.size"]) == [8, 16]
 
 
 def test_single_call_returns_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,6 +114,23 @@ def test_open_analysis_reopens_stored_results(tmp_path: Path, monkeypatch: pytes
     assert run.load_json("trace.json") == {"size": 8}
 
 
+def test_top_level_load_frame(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
+
+    @bk.func("top-level-load")
+    def top_level_load(n: int) -> None:
+        bk.context().save_result({"value": float(n)})
+
+    top_level_load.sweep(cases=[{"n": 1}, {"n": 2}], show_progress=False)
+
+    frame = bk.load_frame("top-level-load")
+    assert len(frame) == 2
+    assert list(frame["result.value"]) == [1.0, 2.0]
+
+    runs = bk.load_runs("top-level-load", status=bk.RunStatus.OK)
+    assert len(runs) == 2
+
+
 def test_analysis_is_iterable_over_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
 
@@ -176,13 +182,14 @@ def test_run_folders_are_nested_by_benchmark_and_sweep(tmp_path: Path, monkeypat
     analysis = nested_layout.sweep(cases=[{"size": 8}], show_progress=False)
     run = analysis.get_run(config={"size": 8}, status=bk.RunStatus.OK)
 
+    assert run.artifact_dir is not None
     relative = run.artifact_dir.relative_to(tmp_path / "home")
     assert relative.parts[0] == "runs"
     assert relative.parts[1] == "nested-layout"
     assert len(relative.parts) >= 4  # runs/benchmark/sweep/case_key
 
 
-def test_resume_skips_completed_cases_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resume_skips_completed_cases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
     calls = {"count": 0}
 
@@ -194,10 +201,11 @@ def test_resume_skips_completed_cases_by_default(tmp_path: Path, monkeypatch: py
     # First call runs 2 cases
     resume_benchmark.sweep(cases=[{"size": 8}, {"size": 16}], show_progress=False)
 
-    # Second call resumes -- completed cases skipped, new case runs
+    # Second call with resume=True -- completed cases skipped, new case runs
     resume_benchmark.sweep(
         cases=[{"size": 8}, {"size": 16}, {"size": 32}],
         show_progress=False,
+        resume=True,
     )
 
     assert calls["count"] == 3
@@ -213,10 +221,8 @@ def test_open_analysis_defaults_to_latest_sweep(tmp_path: Path, monkeypatch: pyt
     # First sweep
     a1 = default_sweep_benchmark.sweep(cases=[{"size": 8}], show_progress=False)
 
-    # Force a second sweep
-    monkeypatch.setenv("BENCHKIT_NEW_SWEEP", "1")
+    # Second sweep (fresh by default)
     a2 = default_sweep_benchmark.sweep(cases=[{"size": 16}], show_progress=False)
-    monkeypatch.delenv("BENCHKIT_NEW_SWEEP")
 
     assert a1.sweep_id != a2.sweep_id
     analysis = bk.open_analysis("default-sweep-benchmark")
@@ -263,7 +269,7 @@ def test_parallel_sweep_produces_correct_results(tmp_path: Path, monkeypatch: py
         assert run.metrics == {"compile_time_ms": float(run.config["size"])}
 
 
-def test_new_sweep_env_forces_fresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_sweep_starts_fresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BENCHKIT_HOME", str(tmp_path / "home"))
     calls = {"count": 0}
 
@@ -274,13 +280,18 @@ def test_new_sweep_env_forces_fresh(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     a1 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
 
-    # Without BENCHKIT_NEW_SWEEP, second call resumes (skips completed)
+    # By default, second call starts a fresh sweep (re-runs cases)
     a2 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
-    assert a1.sweep_id == a2.sweep_id
-    assert calls["count"] == 1
+    assert a2.sweep_id != a1.sweep_id
+    assert calls["count"] == 2
 
-    # With BENCHKIT_NEW_SWEEP=1, forces a fresh sweep
-    monkeypatch.setenv("BENCHKIT_NEW_SWEEP", "1")
-    a3 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
-    assert a3.sweep_id != a1.sweep_id
+    # With resume=True, resumes the latest sweep (skips completed)
+    a3 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False, resume=True)
+    assert a3.sweep_id == a2.sweep_id
+    assert calls["count"] == 2
+
+    # BENCHKIT_RESUME=1 env var also triggers resume
+    monkeypatch.setenv("BENCHKIT_RESUME", "1")
+    a4 = fresh_sweep.sweep(cases=[{"size": 1}], show_progress=False)
+    assert a4.sweep_id == a2.sweep_id
     assert calls["count"] == 2

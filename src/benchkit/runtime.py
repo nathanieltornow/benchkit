@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .logging import RunStatus, capture_env
+from .models import RunStatus, capture_env
 from .store import BenchkitStore
 
 

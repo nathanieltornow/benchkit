@@ -1,12 +1,11 @@
 # benchkit
 
-Benchmark sweeps with automatic resume, parallel execution, and publication-quality plotting. Works with any workload -- Python, Rust, C++, shell scripts.
+Benchmark sweeps with parallel execution and resume support. Works with any workload -- Python, Rust, C++, shell scripts.
 
 ## Install
 
 ```bash
 uv add --group bench git+https://github.com/nathanieltornow/benchkit@v0.0.1
-benchkit init  # install Claude Code skills
 ```
 
 ## Example
@@ -27,19 +26,14 @@ def compile_benchmark(compiler: str, opt_level: str) -> None:
 
 CASES = bk.grid(compiler=["gcc", "clang"], opt_level=["O0", "O2", "O3"])
 
-# Run all cases (resumes automatically if interrupted)
+# Run all cases
 analysis = compile_benchmark.sweep(cases=CASES, max_workers=4, timeout=300)
 
-# Analyze
+# Get results as a DataFrame
 df = analysis.load_frame()
-run = analysis.get_run(config={"compiler": "gcc", "opt_level": "O0"})
-print(run.metrics)
 
-# Plot
-with bk.pplot(preset="double-column", latex=True):
-    fig, ax = plt.subplots()
-    ...
-analysis.save_figure(fig, plot_name="compile-times")
+# Or load from a different script
+df = bk.load_frame("compile-benchmark")
 ```
 
 ## CLI

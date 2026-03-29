@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .logging import RunStatus, capture_env
+from .models import RunStatus, capture_env
 from .runtime import RunContext, activated_context
 from .store import BenchkitStore, case_key, default_store
 

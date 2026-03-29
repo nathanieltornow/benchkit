@@ -31,8 +31,6 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "gitpython>=3.1.45",
-    "matplotlib>=3.9.4",
     "pandas>=2.3.1",
 ]
 dynamic = ["version"]
@@ -43,8 +41,6 @@ benchkit = "benchkit.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/benchkit"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"skills/" = "benchkit/skills/"
 
 [tool.hatch.version]
 source = "vcs"
@@ -93,7 +89,7 @@ explicit_package_bases = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["matplotlib.*", "git.*", "pandas.*", "cycler.*"]
+module = ["pandas.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

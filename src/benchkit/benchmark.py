@@ -15,7 +15,7 @@ from .store import default_store
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
-    from .logging import Run
+    from .models import Run
 
 
 def _normalize_case(case: object) -> dict[str, Any]:
@@ -74,11 +74,13 @@ class BenchFunction:
         show_progress: bool = True,
         max_workers: int = 1,
         timeout: float | None = None,
+        resume: bool = False,
     ) -> Analysis:
         """Run an explicit case list.
 
-        By default, resumes the latest sweep (skipping completed cases).
-        Set ``BENCHKIT_NEW_SWEEP=1`` to force a fresh sweep.
+        By default, starts a fresh sweep. Pass ``resume=True`` or set
+        ``BENCHKIT_RESUME=1`` to resume the latest sweep, skipping completed
+        cases.
 
         Args:
             cases: Explicit list of case dicts, dataclass instances, or objects.
@@ -86,14 +88,16 @@ class BenchFunction:
             max_workers: Number of concurrent worker processes. 1 = sequential.
             timeout: Maximum seconds per case. Cases exceeding this are recorded
                 as failures with ``TimeoutError``. None means no limit.
+            resume: If True, resume the latest sweep instead of starting fresh.
+                Also enabled by ``BENCHKIT_RESUME=1``.
 
         Returns:
             Analysis: Read-only handle for the completed sweep.
         """
         normalized_cases = [_normalize_case(case) for case in cases]
-        force_new = os.environ.get("BENCHKIT_NEW_SWEEP", "").strip() == "1"
+        should_resume = resume or os.environ.get("BENCHKIT_RESUME", "").strip() == "1"
 
-        resolved_sweep = None if force_new else default_store().latest_sweep(self.id)
+        resolved_sweep = default_store().latest_sweep(self.id) if should_resume else None
 
         runner = SweepRunner(
             id=self.id,
